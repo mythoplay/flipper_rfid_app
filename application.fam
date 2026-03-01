@@ -3,7 +3,8 @@ App(
     name="FlippeRFID UHF",
     apptype=FlipperAppType.EXTERNAL,
     entry_point="flipper_rfid_app",
-    cdefines=["APP_VERSION=\\\"0.1.0\\\""],
+    cdefines=["APP_VERSION=\\\"0.2.0\\\""],
+    fap_icon="flipperfid_uhf.png",  # 10x10 1-bit PNG
     requires=["gui", "storage"],
     stack_size=16 * 1024,
     fap_category="Tools",

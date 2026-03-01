@@ -16,6 +16,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef APP_VERSION
+#define APP_VERSION "dev"
+#endif
+
 #define TAG "FLIPPER_RFID"
 #define MAX_TAGS 64
 #define MAX_SCAN_LINES 4
@@ -1023,6 +1027,15 @@ static void flipper_rfid_refresh_scan_view(FlipperRfidApp* app) {
 
 static void flipper_rfid_refresh_about(FlipperRfidApp* app) {
     widget_reset(app->about_widget);
+    char about_text[192];
+    snprintf(
+        about_text,
+        sizeof(about_text),
+        "FlippeRFID for Flipper Zero\n"
+        "Version: %s\n"
+        "Project: EPC/TID R/W\n"
+        "Author:\n Fernando Garcia Villarroel",
+        APP_VERSION);
     widget_add_text_box_element(
         app->about_widget,
         2,
@@ -1031,9 +1044,7 @@ static void flipper_rfid_refresh_about(FlipperRfidApp* app) {
         60,
         AlignLeft,
         AlignTop,
-        "FlippeRFID for Flipper Zero\n"
-        "Project: EPC/TID R/W\n"
-        "Author:\n Fernando García Villarroel",
+        about_text,
         true);
 }
 
@@ -2186,7 +2197,7 @@ static FlipperRfidApp* flipper_rfid_app_alloc(void) {
     view_dispatcher_set_custom_event_callback(app->view_dispatcher, flipper_rfid_custom_event_callback);
     view_dispatcher_set_event_callback_context(app->view_dispatcher, app);
 
-    submenu_set_header(app->main_menu, "FlippeRFID");
+    submenu_set_header(app->main_menu, "FlippeRFID UHF");
     submenu_add_item(app->main_menu, "Scan", MainActionScan, flipper_rfid_submenu_event, app);
     submenu_add_item(app->main_menu, "Write Tag", MainActionWriteTag, flipper_rfid_submenu_event, app);
     submenu_add_item(app->main_menu, "Write USER", MainActionWriteUser, flipper_rfid_submenu_event, app);

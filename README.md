@@ -1,5 +1,9 @@
 # FlippeRFID (Flipper Zero)
 
+## Version
+
+- Current version: `0.2.0` (from `application.fam` -> `APP_VERSION`)
+
 External Flipper Zero app with:
 
 - visual UI (menu, scan, write, clone, config)
