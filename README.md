@@ -1,93 +1,113 @@
 # FlippeRFID (Flipper Zero)
 
-App externa para Flipper Zero con:
+External Flipper Zero app with:
 
-- UI visual (menu, vista de capturas y escritura de tag)
-- ciclo de inventario periodico
-- guardado de tags en SD
-- arquitectura por modulos (`driver` comun + implementaciones)
+- visual UI (menu, scan, write, clone, config)
+- periodic UHF inventory
+- tag persistence on SD card
+- modular architecture (`driver` layer + module implementations)
 
-## Estructura
+## Project Structure
 
-- `application.fam`: metadata de la app
-- `flipper_rfid_app.c`: UI y flujo principal de FlippeRFID (usa interfaz de driver modular)
-- `rfid_driver.*`: interfaz comun para modulos RFID (escalable)
-- `RfidModuleFm504`: modulo funcional actual
-- `RfidModuleRe40` (Zebra): base integrada, comandos aun no implementados
-- `uhf_uart.*`: transporte UART para lectores UHF por serial
-- `uhf_protocol.*`: validacion/parsing/comandos EPC Gen2 (familia FM504)
-- `uhf_reader.*`: implementacion de lectura/escritura sobre protocolo UHF
-- `storage_tags.*`: persistencia en `/ext/apps_data/flipperrfid/` (con fallback de lectura a `/ext/apps_data/fm504_rfid/`)
+- `application.fam`: app metadata
+- `flipper_rfid_app.c`: main UI and app flow (uses modular driver interface)
+- `rfid_driver.*`: common RFID driver interface (scalable)
+- `RfidModuleFm504`: current working module
+- `RfidModuleRe40` (Zebra): integrated base module (commands not implemented yet)
+- `uhf_uart.*`: UART transport for UHF readers
+- `uhf_protocol.*`: EPC Gen2 command building/parsing (FM504-family protocol)
+- `uhf_reader.*`: UHF read/write logic
+- `storage_tags.*`: persistence in `/ext/apps_data/flipperrfid/` (with backward read fallback to `/ext/apps_data/fm504_rfid/`)
 
-## Arquitectura escalable
+## Scalable Architecture
 
-- La UI no llama directo a `uhf_*`.
-- La UI usa `rfid_driver_*` (capa comun).
-- La app permite seleccionar modulo desde UI (`FM504` o `RE40`).
-- Para agregar otro lector, implementa su bloque en `rfid_driver.c` y no hace falta tocar pantallas.
+- UI does not call `uhf_*` directly.
+- UI uses `rfid_driver_*` as an abstraction layer.
+- Module can be selected in UI (`FM504` or `RE40`).
+- To add a new reader, implement it in `rfid_driver.c` without changing UI screens.
 
-## Mapeo de pines FM504 -> Flipper
+## FM504 Pin Mapping -> Flipper
 
-1. `GND reader` -> `GND Flipper`
-2. `TX reader` -> `RX Flipper`
-3. `RX reader` -> `TX Flipper`
-4. `EN` -> `PA7` del Flipper (`gpio_ext_pa7`, pin 2 del header GPIO, linea MOSI)
-5. `VCC reader` -> fuente externa (recomendado en UHF)
+1. `Reader GND` -> `Flipper GND`
+2. `Reader TX` -> `Flipper RX`
+3. `Reader RX` -> `Flipper TX`
+4. `Reader EN` -> `Flipper PA7` (`gpio_ext_pa7`, GPIO header pin 2, MOSI line)
+5. `Reader VCC` -> external power source (recommended for UHF)
 
-### Control de energia por software (`EN`)
+### Software Power Control (`EN`)
 
-- `Start Scan`: pone `EN` en HIGH, espera estabilizacion y arranca lectura.
-- `Stop Scan`: pone `EN` en LOW.
-- Al salir de la app o cambiar de modulo: `EN` vuelve a LOW.
-- En `Write Tag`: habilita temporalmente `EN` para escribir y luego lo deshabilita.
+- `Start Scan`: sets `EN` HIGH, waits for stabilization, then starts scanning.
+- `Stop Scan`: sets `EN` LOW.
+- On app exit or module change: `EN` is forced LOW.
+- For write operations: `EN` is enabled temporarily, then disabled again.
 
-## Importante
+## Current Status
 
-Con el proyecto Python validado (`FM-503-UHF-RFID-Reader-main`) se ajusto la app al modelo de comando ASCII:
+Based on the validated Python project (`FM-503-UHF-RFID-Reader-main`), the app follows the ASCII command model:
 
-- formato general: `<LF><CMD><args><CR>`
-- lectura EPC (single): `<LF>R1,0,<words><CR>`
-- lectura TID: `<LF>R2,<addr>,<words><CR>`
-- inventario multi EPC: `<LF>U<max><CR>` (referencia, no implementado aun)
-- ACK de escritura/lock: respuesta contiene `<OK>`
+- General format: `<LF><CMD><args><CR>`
+- EPC read (single): `<LF>R1,0,<words><CR>`
+- TID read: `<LF>R2,<addr>,<words><CR>`
+- Multi EPC inventory: `<LF>U<max><CR>` (reference, not implemented yet)
+- Write/lock ACK: response contains `<OK>`
 
-Actualmente en la app:
+Current app capabilities:
 
-- `FM503`/`FM504`/`FM505` suelen compartir familia de comandos, pero valida en tu firmware real.
-- `uhf_uart.c` implementa UART real y cola RX para comandos/response.
-- menu principal:
+- `FM503`/`FM504`/`FM505` usually share the same command family (validate against your firmware).
+- `uhf_uart.c` implements real UART with RX buffering.
+- Main menu:
   - `Scan`
   - `Write Tag`
+  - `Write USER`
+  - `Saved Tags`
+  - `Clone`
+  - `Check Protection`
+  - `Config`
+  - `About`
+- `Config` submenu:
   - `Module`
-  - `Read Mode`
+  - `Read Mode` (`EPC`, `TID`, `USER`, `ALL`)
   - `TX Power`
   - `Read Rate (ms)`
-  - `Acerca de`
-- pantalla `Scan` compacta:
-  - cabecera: `Scan > <MODE> <PWR>dB <RATE>ms`
-  - lectura en area grande
-  - botones: `Save`, `Start/Stop`, `Clear`
-- EPC parseado desde respuesta `R` asumiendo formato `CRC16 + PC + EPC`
-- TID parseado desde respuesta `R` como bloque hex
-- `W` exacto puede variar segun firmware; hoy va con `W1,2,<len_words>,<epc_hex>`.
+  - `Access Password`
+- Compact scan screen:
+  - header: `Scan > <MODE> <PWR>dB <RATE>ms`
+  - large read area
+  - buttons: `Save`, `Start/Stop`, `Clear`
+- EPC parsing from `R` response (`CRC16 + PC + EPC` assumption)
+- TID parsing from `R` response as hex block
+- USER read/write supported
+- Write command format may vary by firmware (`W1,2,<len_words>,<epc_hex>` currently used)
 
-Debes completar estas funciones según el manual del FM-504:
+## Persistence and Robustness
 
-1. validar `uhf_uart_open`, `uhf_uart_send`, `uhf_uart_read` con tu cableado real
-2. validar `uhf_protocol_make_write_epc_cmd` contra traza real del FM504
-3. si usas `U` multi-tag, agregar parser de lista por lineas
+- Current data path: `/ext/apps_data/flipperrfid/`
+- Backward compatibility: if new files are missing, data is loaded from `/ext/apps_data/fm504_rfid/`
+- `Saved Tags` hardened to prevent freezes from corrupted CSV:
+  - line-by-line loading
+  - line length limit
+  - scanned-byte limit
+  - field sanitization for invalid characters
 
-## Flujo en la app
+## Pending Hardware Validation
 
-1. `Iniciar escaneo`: activa inventario periodico
-2. `Ver capturas`: muestra EPC o TID segun modo seleccionado
-3. `Escribir EPC`: ingresa HEX y envia escritura
-4. `Guardar capturas`: guarda CSV simple en SD
-5. `Limpiar capturas`
+Validate these against your FM504 traces/manual:
+
+1. `uhf_uart_open`, `uhf_uart_send`, `uhf_uart_read` with real wiring
+2. `uhf_protocol_make_write_epc_cmd` against actual FM504 write traces
+3. If using `U` multi-tag mode, implement line-based multi-tag parser
+
+## App Flow
+
+1. `Start scan`: starts periodic inventory
+2. `View captures`: shows EPC/TID/USER based on selected mode
+3. `Write EPC`: edit HEX and write to target tag
+4. `Save captures`: saves to `saved_tags.csv`
+5. `Clone`: capture source tag and write to destination tag
+6. `Write USER`: edit and write USER bank
+7. `Check Protection`: controlled write check to detect lock behavior
 
 ## Build (ufbt)
-
-Si tienes `ufbt`:
 
 ```bash
 cd /Users/fernando/Source_Code/FlipperZero_RFID/flipper_rfid_app
@@ -95,7 +115,7 @@ ufbt build
 ufbt launch
 ```
 
-## Siguiente paso recomendado
+## Recommended Next Step
 
-Primero integra UART real y confirma que recibes una trama cruda del FM-504.
-Con una captura real de respuesta, ajusta parser EPC/TID
+Capture and share one real raw response frame from your FM504 for each operation (EPC read, TID read, write ACK).
+With that, protocol parsing and write reliability can be finalized safely.
