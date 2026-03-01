@@ -12,7 +12,7 @@ External Flipper Zero app with:
 - `application.fam`: app metadata
 - `flipper_rfid_app.c`: main UI and app flow (uses modular driver interface)
 - `rfid_driver.*`: common RFID driver interface (scalable)
-- `RfidModuleFm504`: current working module
+- `RfidModuleFm504/Fm505/Fm507/Fm509/Fm505A`: Fonkan family profiles
 - `RfidModuleRe40` (Zebra): integrated base module (commands not implemented yet)
 - `uhf_uart.*`: UART transport for UHF readers
 - `uhf_protocol.*`: EPC Gen2 command building/parsing (FM504-family protocol)
@@ -23,7 +23,7 @@ External Flipper Zero app with:
 
 - UI does not call `uhf_*` directly.
 - UI uses `rfid_driver_*` as an abstraction layer.
-- Module can be selected in UI (`FM504` or `RE40`).
+- Module can be selected in UI (`Fonkan FM504/FM505/FM507/FM509/FM505A` or `Zebra RE40`).
 - To add a new reader, implement it in `rfid_driver.c` without changing UI screens.
 
 ## FM504 Pin Mapping -> Flipper
@@ -67,9 +67,16 @@ Current app capabilities:
 - `Config` submenu:
   - `Module`
   - `Read Mode` (`EPC`, `TID`, `USER`, `ALL`)
-  - `TX Power`
+  - `TX Power` (`-2dB` to `27dB`)
   - `Read Rate (ms)`
   - `Access Password`
+- Available module profiles:
+  - `Fonkan FM504` (reference range: ~0-40cm at 1dB)
+  - `Fonkan FM505` (reference range: ~0-2m at 3dB)
+  - `Fonkan FM507` (reference range: ~0-3m at 4dB)
+  - `Fonkan FM509` (reference range: ~0-3.5m at 5dB)
+  - `Fonkan FM505A` (reference range: ~0-4m at 5.5dB)
+  - `Zebra RE40`
 - Compact scan screen:
   - header: `Scan > <MODE> <PWR>dB <RATE>ms`
   - large read area
