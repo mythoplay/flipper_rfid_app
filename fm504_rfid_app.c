@@ -83,6 +83,8 @@ typedef enum {
     EventScanToggle,
     EventScanSave,
     EventScanClear,
+    EventScanTagPrev,
+    EventScanTagNext,
     EventWriteCommit,
     EventAccessPwdCommit,
     EventWriteDo,
@@ -102,6 +104,12 @@ typedef enum {
     EventWriteSelectBase = 2000,
     EventTxPowerBase = 3000,
 } CustomEvent;
+
+typedef struct {
+    char epc[96];
+    char tid[96];
+    char user[96];
+} ScanAllEntry;
 
 typedef struct {
     Gui* gui;
@@ -144,7 +152,14 @@ typedef struct {
     char status_msg[64];
     char scan_mode_line[40];
     char scan_last_line[96];
+    char scan_last_epc[96];
+    char scan_last_tid[96];
+    char scan_last_user[96];
     char scan_preview_line[96];
+    uint8_t scan_view_tab;
+    ScanAllEntry scan_all_entries[MAX_TAGS];
+    size_t scan_all_count;
+    size_t scan_all_selected;
     char write_buffer[40];
     char access_password[9];
     char access_input_buffer[9];
@@ -163,6 +178,7 @@ typedef struct {
 
 static void fm504_app_free(Fm504App* app);
 static bool fm504_add_or_update_tag(Fm504App* app, const RfidTagRead* tag);
+static void fm504_persist_settings(Fm504App* app);
 
 static const char* fm504_scan_mode_name(RfidScanMode mode) {
     switch(mode) {
@@ -190,6 +206,62 @@ static const char* fm504_scan_mode_all_step_name(uint8_t step) {
     }
 }
 
+static void fm504_scan_all_reset(Fm504App* app) {
+    if(!app) return;
+    app->scan_all_count = 0;
+    app->scan_all_selected = 0;
+    memset(app->scan_all_entries, 0, sizeof(app->scan_all_entries));
+}
+
+static size_t fm504_scan_all_find_by_epc(Fm504App* app, const char* epc) {
+    if(!app || !epc || epc[0] == '\0') return SIZE_MAX;
+    for(size_t i = 0; i < app->scan_all_count; i++) {
+        if(strcmp(app->scan_all_entries[i].epc, epc) == 0) return i;
+    }
+    return SIZE_MAX;
+}
+
+static void fm504_scan_all_record(Fm504App* app, const char* bank, const char* value) {
+    if(!app || !bank || !value || value[0] == '\0') return;
+
+    if(strcmp(bank, "EPC") == 0) {
+        size_t idx = fm504_scan_all_find_by_epc(app, value);
+        if(idx == SIZE_MAX) {
+            if(app->scan_all_count >= MAX_TAGS) return;
+            idx = app->scan_all_count++;
+        }
+        snprintf(app->scan_all_entries[idx].epc, sizeof(app->scan_all_entries[idx].epc), "%s", value);
+        app->scan_all_selected = idx;
+        return;
+    }
+
+    /* Do not create phantom entries from TID/USER without a known EPC anchor. */
+    if(app->scan_all_count == 0) return;
+
+    ScanAllEntry* e = &app->scan_all_entries[app->scan_all_selected];
+    if(strcmp(bank, "TID") == 0) {
+        snprintf(e->tid, sizeof(e->tid), "%s", value);
+    } else if(strcmp(bank, "USER") == 0) {
+        snprintf(e->user, sizeof(e->user), "%s", value);
+    }
+}
+
+static void fm504_scan_all_build_preview(const Fm504App* app, char* out, size_t out_cap) {
+    if(!app || !out || out_cap < 2) return;
+    if(app->scan_all_count == 0 || app->scan_all_selected >= app->scan_all_count) {
+        snprintf(out, out_cap, "E:No EPC\nT:No TID\nU:No USER");
+        return;
+    }
+    const ScanAllEntry* e = &app->scan_all_entries[app->scan_all_selected];
+    snprintf(
+        out,
+        out_cap,
+        "E:%.18s\nT:%.18s\nU:%.18s",
+        (e->epc[0] != '\0') ? e->epc : "No EPC",
+        (e->tid[0] != '\0') ? e->tid : "No TID",
+        (e->user[0] != '\0') ? e->user : "No USER");
+}
+
 static RfidScanMode fm504_effective_driver_mode(RfidScanMode mode, uint8_t all_step) {
     if(mode == RfidScanModeTid) return RfidScanModeTid;
     if(mode == RfidScanModeUser) return RfidScanModeUser;
@@ -206,6 +278,20 @@ static void fm504_apply_scan_mode_to_driver(Fm504App* app) {
     rfid_driver_set_mode(app->driver, fm504_effective_driver_mode(app->scan_mode, app->scan_all_step));
 }
 
+static void fm504_persist_settings(Fm504App* app) {
+    if(!app) return;
+    RfidAppSettings settings = {
+        .module = app->current_module,
+        .scan_mode = app->scan_mode,
+        .tx_power_db = app->tx_power_db,
+        .read_rate_ms = app->read_rate_ms,
+        .use_access_password = app->use_access_password,
+    };
+    strncpy(settings.access_password, app->access_password, sizeof(settings.access_password) - 1);
+    settings.access_password[sizeof(settings.access_password) - 1] = '\0';
+    (void)storage_settings_save(&settings);
+}
+
 static void fm504_switch_view(Fm504App* app, ViewId view_id) {
     if(!app || app->closing || !app->view_dispatcher) return;
     app->current_view = view_id;
@@ -213,16 +299,25 @@ static void fm504_switch_view(Fm504App* app, ViewId view_id) {
 }
 
 static void fm504_scan_button_callback(GuiButtonType button, InputType type, void* context) {
-    if(type != InputTypeShort) return;
     Fm504App* app = context;
     if(!app || app->closing || !app->view_dispatcher) return;
 
     uint32_t event = EventScanToggle;
-    if(button == GuiButtonTypeLeft) {
-        event = EventScanSave;
-    } else if(button == GuiButtonTypeRight) {
-        event = EventScanClear;
+
+    if(type == InputTypeLong) {
+        if(button == GuiButtonTypeLeft) event = EventScanSave;
+        else if(button == GuiButtonTypeRight) event = EventScanClear;
+        else return;
+    } else if(type == InputTypeShort) {
+        if(button == GuiButtonTypeLeft) {
+            event = (app->scan_mode == RfidScanModeAll) ? EventScanTagPrev : EventScanSave;
+        } else if(button == GuiButtonTypeRight) {
+            event = (app->scan_mode == RfidScanModeAll) ? EventScanTagNext : EventScanClear;
+        }
+    } else {
+        return;
     }
+
     view_dispatcher_send_custom_event(app->view_dispatcher, event);
 }
 
@@ -673,37 +768,62 @@ static void fm504_build_scan_preview_line(const char* in, char* out, size_t out_
 
 static void fm504_refresh_scan_view(Fm504App* app) {
     if(!app || !app->scan_widget) return;
-    char qty_line[24];
+    char qty_line[28];
+    const char* line_value = app->scan_last_line;
+    const char* left_label = "Save";
+    const char* right_label = "Clear";
 
     widget_reset(app->scan_widget);
-    if(app->scan_last_line[0] == '\0') {
-        strncpy(app->scan_last_line, "No reads", sizeof(app->scan_last_line) - 1);
-        app->scan_last_line[sizeof(app->scan_last_line) - 1] = '\0';
-    }
+    if(app->scan_last_line[0] == '\0') snprintf(app->scan_last_line, sizeof(app->scan_last_line), "No reads");
+    if(app->scan_last_epc[0] == '\0') snprintf(app->scan_last_epc, sizeof(app->scan_last_epc), "No reads");
+    if(app->scan_last_tid[0] == '\0') snprintf(app->scan_last_tid, sizeof(app->scan_last_tid), "No reads");
+    if(app->scan_last_user[0] == '\0') snprintf(app->scan_last_user, sizeof(app->scan_last_user), "No reads");
 
-    snprintf(
-        app->scan_mode_line,
-        sizeof(app->scan_mode_line),
-        "Scan > %s %ddB %ums",
-        fm504_scan_mode_name(app->scan_mode),
-        app->tx_power_db,
-        app->read_rate_ms);
-    snprintf(qty_line, sizeof(qty_line), "Qty: %u", (unsigned)app->tags_count);
-    fm504_build_scan_preview_line(app->scan_last_line, app->scan_preview_line, sizeof(app->scan_preview_line));
+    if(app->scan_mode == RfidScanModeAll) {
+        snprintf(
+            app->scan_mode_line,
+            sizeof(app->scan_mode_line),
+            "Scan > ALL %ddB %ums",
+            app->tx_power_db,
+            app->read_rate_ms);
+        fm504_scan_all_build_preview(app, app->scan_preview_line, sizeof(app->scan_preview_line));
+        line_value = app->scan_preview_line;
+        left_label = "Tag-";
+        right_label = "Tag+";
+        snprintf(
+            qty_line,
+            sizeof(qty_line),
+            "Qty:%u Tag:%u/%u",
+            (unsigned)app->scan_all_count,
+            (unsigned)((app->scan_all_count == 0) ? 0 : (app->scan_all_selected + 1)),
+            (unsigned)app->scan_all_count);
+    } else {
+        snprintf(
+            app->scan_mode_line,
+            sizeof(app->scan_mode_line),
+            "Scan > %s %ddB %ums",
+            fm504_scan_mode_name(app->scan_mode),
+            app->tx_power_db,
+            app->read_rate_ms);
+        snprintf(qty_line, sizeof(qty_line), "Qty: %u", (unsigned)app->tags_count);
+    }
+    if(app->scan_mode != RfidScanModeAll) {
+        fm504_build_scan_preview_line(line_value, app->scan_preview_line, sizeof(app->scan_preview_line));
+    }
 
     widget_add_string_element(app->scan_widget, 2, 4, AlignLeft, AlignTop, FontPrimary, app->scan_mode_line);
     widget_add_string_element(app->scan_widget, 2, 16, AlignLeft, AlignTop, FontSecondary, qty_line);
     widget_add_text_box_element(
         app->scan_widget, 2, 26, 124, 28, AlignLeft, AlignTop, app->scan_preview_line, true);
 
-    widget_add_button_element(app->scan_widget, GuiButtonTypeLeft, "Save", fm504_scan_button_callback, app);
+    widget_add_button_element(app->scan_widget, GuiButtonTypeLeft, left_label, fm504_scan_button_callback, app);
     widget_add_button_element(
         app->scan_widget,
         GuiButtonTypeCenter,
         app->scan_running ? "Stop" : "Start",
         fm504_scan_button_callback,
         app);
-    widget_add_button_element(app->scan_widget, GuiButtonTypeRight, "Clear", fm504_scan_button_callback, app);
+    widget_add_button_element(app->scan_widget, GuiButtonTypeRight, right_label, fm504_scan_button_callback, app);
 }
 
 static void fm504_refresh_about(Fm504App* app) {
@@ -934,6 +1054,7 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
         } else {
             snprintf(app->status_msg, sizeof(app->status_msg), "No ACK power (%ddB)", db);
         }
+        fm504_persist_settings(app);
         fm504_switch_view(app, ViewIdMainMenu);
         return true;
     }
@@ -1022,6 +1143,7 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
     case ModuleActionFm504:
         if(fm504_reopen_driver(app, RfidModuleFm504)) {
             snprintf(app->status_msg, sizeof(app->status_msg), "Module: FM504");
+            fm504_persist_settings(app);
         } else {
             snprintf(app->status_msg, sizeof(app->status_msg), "Error opening FM504");
         }
@@ -1031,6 +1153,7 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
     case ModuleActionRe40:
         if(fm504_reopen_driver(app, RfidModuleRe40)) {
             snprintf(app->status_msg, sizeof(app->status_msg), "Module: RE40 (base)");
+            fm504_persist_settings(app);
         } else {
             snprintf(app->status_msg, sizeof(app->status_msg), "Error opening RE40");
         }
@@ -1061,6 +1184,7 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
         app->scan_mode = RfidScanModeEpc;
         app->scan_all_step = 0;
         fm504_apply_scan_mode_to_driver(app);
+        fm504_persist_settings(app);
         snprintf(app->status_msg, sizeof(app->status_msg), "Read mode: EPC");
         fm504_switch_view(app, ViewIdMainMenu);
         return true;
@@ -1069,6 +1193,7 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
         app->scan_mode = RfidScanModeTid;
         app->scan_all_step = 0;
         fm504_apply_scan_mode_to_driver(app);
+        fm504_persist_settings(app);
         snprintf(app->status_msg, sizeof(app->status_msg), "Read mode: TID");
         fm504_switch_view(app, ViewIdMainMenu);
         return true;
@@ -1077,6 +1202,7 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
         app->scan_mode = RfidScanModeUser;
         app->scan_all_step = 0;
         fm504_apply_scan_mode_to_driver(app);
+        fm504_persist_settings(app);
         snprintf(app->status_msg, sizeof(app->status_msg), "Read mode: USER");
         fm504_switch_view(app, ViewIdMainMenu);
         return true;
@@ -1084,61 +1210,72 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
     case ModeActionAll:
         app->scan_mode = RfidScanModeAll;
         app->scan_all_step = 0;
+        app->scan_view_tab = 0;
         fm504_apply_scan_mode_to_driver(app);
+        fm504_persist_settings(app);
         snprintf(app->status_msg, sizeof(app->status_msg), "Read mode: ALL");
         fm504_switch_view(app, ViewIdMainMenu);
         return true;
 
     case RateAction10:
         fm504_apply_read_rate(app, 10);
+        fm504_persist_settings(app);
         snprintf(app->status_msg, sizeof(app->status_msg), "Read rate: 10ms");
         fm504_switch_view(app, ViewIdMainMenu);
         return true;
 
     case RateAction25:
         fm504_apply_read_rate(app, 25);
+        fm504_persist_settings(app);
         snprintf(app->status_msg, sizeof(app->status_msg), "Read rate: 25ms");
         fm504_switch_view(app, ViewIdMainMenu);
         return true;
 
     case RateAction50:
         fm504_apply_read_rate(app, 50);
+        fm504_persist_settings(app);
         snprintf(app->status_msg, sizeof(app->status_msg), "Read rate: 50ms");
         fm504_switch_view(app, ViewIdMainMenu);
         return true;
 
     case RateAction100:
         fm504_apply_read_rate(app, 100);
+        fm504_persist_settings(app);
         snprintf(app->status_msg, sizeof(app->status_msg), "Read rate: 100ms");
         fm504_switch_view(app, ViewIdMainMenu);
         return true;
 
     case RateAction200:
         fm504_apply_read_rate(app, 200);
+        fm504_persist_settings(app);
         snprintf(app->status_msg, sizeof(app->status_msg), "Read rate: 200ms");
         fm504_switch_view(app, ViewIdMainMenu);
         return true;
 
     case RateAction300:
         fm504_apply_read_rate(app, 300);
+        fm504_persist_settings(app);
         snprintf(app->status_msg, sizeof(app->status_msg), "Read rate: 300ms");
         fm504_switch_view(app, ViewIdMainMenu);
         return true;
 
     case RateAction400:
         fm504_apply_read_rate(app, 400);
+        fm504_persist_settings(app);
         snprintf(app->status_msg, sizeof(app->status_msg), "Read rate: 400ms");
         fm504_switch_view(app, ViewIdMainMenu);
         return true;
 
     case RateAction500:
         fm504_apply_read_rate(app, 500);
+        fm504_persist_settings(app);
         snprintf(app->status_msg, sizeof(app->status_msg), "Read rate: 500ms");
         fm504_switch_view(app, ViewIdMainMenu);
         return true;
 
     case RateAction750:
         fm504_apply_read_rate(app, 750);
+        fm504_persist_settings(app);
         snprintf(app->status_msg, sizeof(app->status_msg), "Read rate: 750ms");
         fm504_switch_view(app, ViewIdMainMenu);
         return true;
@@ -1148,7 +1285,12 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
         if(app->scan_running) {
             bool probe_ok = true;
             snprintf(app->scan_last_line, sizeof(app->scan_last_line), "No reads");
+            snprintf(app->scan_last_epc, sizeof(app->scan_last_epc), "No reads");
+            snprintf(app->scan_last_tid, sizeof(app->scan_last_tid), "No reads");
+            snprintf(app->scan_last_user, sizeof(app->scan_last_user), "No reads");
             app->scan_all_step = 0;
+            app->scan_view_tab = 0;
+            fm504_scan_all_reset(app);
             fm504_apply_scan_mode_to_driver(app);
             if(!rfid_driver_set_enabled(app->driver, true)) {
                 app->scan_running = false;
@@ -1184,9 +1326,32 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
 
     case EventScanClear:
         app->tags_count = 0;
+        fm504_scan_all_reset(app);
         snprintf(app->status_msg, sizeof(app->status_msg), "Captures cleared");
         snprintf(app->scan_last_line, sizeof(app->scan_last_line), "No reads");
+        snprintf(app->scan_last_epc, sizeof(app->scan_last_epc), "No reads");
+        snprintf(app->scan_last_tid, sizeof(app->scan_last_tid), "No reads");
+        snprintf(app->scan_last_user, sizeof(app->scan_last_user), "No reads");
         fm504_refresh_scan_view(app);
+        return true;
+
+    case EventScanTagPrev:
+        if(app->scan_mode == RfidScanModeAll) {
+            if(app->scan_all_count > 0) {
+                app->scan_all_selected =
+                    (app->scan_all_selected == 0) ? (app->scan_all_count - 1) : (app->scan_all_selected - 1);
+            }
+            fm504_refresh_scan_view(app);
+        }
+        return true;
+
+    case EventScanTagNext:
+        if(app->scan_mode == RfidScanModeAll) {
+            if(app->scan_all_count > 0) {
+                app->scan_all_selected = (app->scan_all_selected + 1U) % app->scan_all_count;
+            }
+            fm504_refresh_scan_view(app);
+        }
         return true;
 
     case EventCloneSourceRead:
@@ -1234,6 +1399,7 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
 
     case EventCloneToggleAccess:
         app->use_access_password = !app->use_access_password;
+        fm504_persist_settings(app);
         snprintf(
             app->status_msg,
             sizeof(app->status_msg),
@@ -1296,14 +1462,29 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
             }
             RfidTagRead tag = {0};
             if(rfid_driver_scan_once(app->driver, &tag)) {
-                bool is_new = fm504_add_or_update_tag(app, &tag);
-                if(is_new) fm504_vibro_read(app);
                 const char* read_label =
                     (app->scan_mode == RfidScanModeAll)
                         ? fm504_scan_mode_all_step_name(app->scan_all_step)
                         : fm504_scan_mode_name(app->scan_mode);
+                bool is_new = false;
+                if(app->scan_mode == RfidScanModeAll) {
+                    fm504_scan_all_record(app, read_label, tag.primary_hex);
+                    if(strcmp(read_label, "EPC") == 0) {
+                        is_new = fm504_add_or_update_tag(app, &tag);
+                    }
+                } else {
+                    is_new = fm504_add_or_update_tag(app, &tag);
+                }
+                if(is_new) fm504_vibro_read(app);
                 snprintf(app->status_msg, sizeof(app->status_msg), "%s: %s", read_label, tag.primary_hex);
                 snprintf(app->scan_last_line, sizeof(app->scan_last_line), "%s", tag.primary_hex);
+                if(strcmp(read_label, "EPC") == 0) {
+                    snprintf(app->scan_last_epc, sizeof(app->scan_last_epc), "%s", tag.primary_hex);
+                } else if(strcmp(read_label, "TID") == 0) {
+                    snprintf(app->scan_last_tid, sizeof(app->scan_last_tid), "%s", tag.primary_hex);
+                } else if(strcmp(read_label, "USER") == 0) {
+                    snprintf(app->scan_last_user, sizeof(app->scan_last_user), "%s", tag.primary_hex);
+                }
                 if(app->current_view == ViewIdScan) fm504_refresh_scan_view(app);
             }
             if(app->scan_mode == RfidScanModeAll) {
@@ -1372,6 +1553,7 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
 
     case EventWriteToggleAccess:
         app->use_access_password = !app->use_access_password;
+        fm504_persist_settings(app);
         fm504_refresh_write_confirm_view(app);
         return true;
 
@@ -1386,6 +1568,7 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
         } else {
             strncpy(app->access_password, app->access_input_buffer, sizeof(app->access_password) - 1);
             app->access_password[sizeof(app->access_password) - 1] = '\0';
+            fm504_persist_settings(app);
             snprintf(app->status_msg, sizeof(app->status_msg), "Access password saved: %s", app->access_password);
         }
         fm504_switch_view(app, ViewIdMainMenu);
@@ -1439,6 +1622,10 @@ static Fm504App* fm504_app_alloc(void) {
     app->selected_tag_idx = SIZE_MAX;
     snprintf(app->status_msg, sizeof(app->status_msg), "Ready");
     snprintf(app->scan_last_line, sizeof(app->scan_last_line), "No reads");
+    snprintf(app->scan_last_epc, sizeof(app->scan_last_epc), "No reads");
+    snprintf(app->scan_last_tid, sizeof(app->scan_last_tid), "No reads");
+    snprintf(app->scan_last_user, sizeof(app->scan_last_user), "No reads");
+    app->scan_view_tab = 0;
     app->last_write_epc[0] = '\0';
     app->last_write_detail[0] = '\0';
     app->last_write_ok = false;
@@ -1448,6 +1635,25 @@ static Fm504App* fm504_app_alloc(void) {
     app->protection_epc[0] = '\0';
     snprintf(app->protection_status, sizeof(app->protection_status), "READY");
     snprintf(app->protection_detail, sizeof(app->protection_detail), "Place tag and press Check");
+
+    RfidAppSettings settings = {
+        .module = app->current_module,
+        .scan_mode = app->scan_mode,
+        .tx_power_db = app->tx_power_db,
+        .read_rate_ms = app->read_rate_ms,
+        .use_access_password = app->use_access_password,
+    };
+    strncpy(settings.access_password, app->access_password, sizeof(settings.access_password) - 1);
+    settings.access_password[sizeof(settings.access_password) - 1] = '\0';
+    if(storage_settings_load(&settings)) {
+        app->current_module = settings.module;
+        app->scan_mode = settings.scan_mode;
+        app->tx_power_db = settings.tx_power_db;
+        app->read_rate_ms = settings.read_rate_ms;
+        app->use_access_password = settings.use_access_password;
+        strncpy(app->access_password, settings.access_password, sizeof(app->access_password) - 1);
+        app->access_password[sizeof(app->access_password) - 1] = '\0';
+    }
 
     RfidDriverConfig driver_cfg = {
         .module = app->current_module,
