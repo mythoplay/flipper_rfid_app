@@ -37,6 +37,12 @@ bool fm504_protocol_make_write_epc_cmd(
     uint8_t* out,
     size_t out_cap,
     size_t* out_len);
+bool fm504_protocol_make_write_user_cmd(
+    uint8_t addr_words,
+    const char* user_hex,
+    uint8_t* out,
+    size_t out_cap,
+    size_t* out_len);
 
 bool fm504_protocol_parse_inventory(const uint8_t* frame, size_t frame_len, Fm504InventoryResult* out);
 bool fm504_protocol_parse_tid_read(const uint8_t* frame, size_t frame_len, Fm504InventoryResult* out);

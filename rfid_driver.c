@@ -296,6 +296,34 @@ bool rfid_driver_write_epc(RfidDriver* driver, const char* epc_hex) {
     return rfid_driver_write_epc_ex(driver, epc_hex, NULL, 0);
 }
 
+bool rfid_driver_write_user_ex(
+    RfidDriver* driver,
+    uint8_t addr_words,
+    const char* user_hex,
+    char* detail,
+    size_t detail_cap) {
+    if(!driver || !driver->impl || !user_hex) return false;
+    if(detail && detail_cap > 0) detail[0] = '\0';
+
+    switch(driver->module) {
+    case RfidModuleFm504: {
+        DriverFm504* impl = driver->impl;
+        bool was_enabled = impl->enabled;
+        if(!was_enabled) {
+            if(!rfid_driver_set_enabled(driver, true)) return false;
+        }
+        bool ok = fm504_reader_write_user_ex(impl->uart, addr_words, user_hex, detail, detail_cap);
+        if(!was_enabled) rfid_driver_set_enabled(driver, false);
+        return ok;
+    }
+    case RfidModuleRe40:
+        if(detail && detail_cap > 0) snprintf(detail, detail_cap, "RE40 write user not implemented");
+        return false;
+    default:
+        return false;
+    }
+}
+
 bool rfid_driver_access_pwd(
     RfidDriver* driver,
     const char* access_pwd_hex,

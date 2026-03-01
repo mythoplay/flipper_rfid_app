@@ -47,6 +47,12 @@ bool rfid_driver_write_epc_ex(
     const char* epc_hex,
     char* detail,
     size_t detail_cap);
+bool rfid_driver_write_user_ex(
+    RfidDriver* driver,
+    uint8_t addr_words,
+    const char* user_hex,
+    char* detail,
+    size_t detail_cap);
 bool rfid_driver_access_pwd(
     RfidDriver* driver,
     const char* access_pwd_hex,

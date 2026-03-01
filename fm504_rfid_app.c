@@ -37,12 +37,16 @@ typedef enum {
     ViewIdReadMode,
     ViewIdTxPower,
     ViewIdReadRate,
+    ViewIdSavedTags,
+    ViewIdSavedTagDetail,
     ViewIdAbout,
 } ViewId;
 
 typedef enum {
     MainActionScan = 100,
     MainActionWriteTag,
+    MainActionWriteUser,
+    MainActionSavedTags,
     MainActionAccessPassword,
     MainActionClone,
     MainActionCheckProtection,
@@ -86,6 +90,7 @@ typedef enum {
     EventScanTagPrev,
     EventScanTagNext,
     EventWriteCommit,
+    EventWriteUserCommit,
     EventAccessPwdCommit,
     EventWriteDo,
     EventWriteToggleAccess,
@@ -100,9 +105,14 @@ typedef enum {
     EventCloneBackToSource,
     EventCloneResultBack,
     EventProtectionRun,
+    EventProtectionDo,
     EventProtectionBack,
     EventWriteSelectBase = 2000,
     EventTxPowerBase = 3000,
+    EventSavedSelectBase = 4000,
+    EventSavedTagBack = 5000,
+    EventSavedTagDelete,
+    EventSavedTagClearAll,
 } CustomEvent;
 
 typedef struct {
@@ -118,10 +128,12 @@ typedef struct {
     Submenu* config_menu;
     Widget* scan_widget;
     Submenu* write_select_menu;
+    Submenu* saved_tags_menu;
     TextInput* write_input;
     TextInput* access_input;
     Widget* write_confirm_widget;
     Widget* write_result_widget;
+    Widget* saved_tag_widget;
     Widget* clone_source_widget;
     Widget* clone_target_widget;
     Widget* clone_result_widget;
@@ -161,12 +173,16 @@ typedef struct {
     size_t scan_all_count;
     size_t scan_all_selected;
     char write_buffer[40];
+    char write_user_buffer[65];
     char access_password[9];
     char access_input_buffer[9];
     bool use_access_password;
+    bool write_user_mode;
     char last_write_epc[33];
+    char last_write_user[65];
     char last_write_detail[64];
     bool last_write_ok;
+    bool last_write_is_user;
     char clone_source_epc[33];
     char clone_info_line[96];
     char clone_result_detail[64];
@@ -174,6 +190,10 @@ typedef struct {
     char protection_epc[33];
     char protection_status[24];
     char protection_detail[64];
+    SavedUhfTag saved_tags[MAX_TAGS];
+    size_t saved_tags_count;
+    size_t saved_selected_idx;
+    char saved_tag_text[320];
 } Fm504App;
 
 static void fm504_app_free(Fm504App* app);
@@ -189,18 +209,6 @@ static const char* fm504_scan_mode_name(RfidScanMode mode) {
     case RfidScanModeAll:
         return "ALL";
     case RfidScanModeEpc:
-    default:
-        return "EPC";
-    }
-}
-
-static const char* fm504_scan_mode_all_step_name(uint8_t step) {
-    switch(step % 3) {
-    case 1:
-        return "TID";
-    case 2:
-        return "USER";
-    case 0:
     default:
         return "EPC";
     }
@@ -223,6 +231,7 @@ static size_t fm504_scan_all_find_by_epc(Fm504App* app, const char* epc) {
 
 static void fm504_scan_all_record(Fm504App* app, const char* bank, const char* value) {
     if(!app || !bank || !value || value[0] == '\0') return;
+    if(app->scan_all_selected >= MAX_TAGS) app->scan_all_selected = 0;
 
     if(strcmp(bank, "EPC") == 0) {
         size_t idx = fm504_scan_all_find_by_epc(app, value);
@@ -237,6 +246,7 @@ static void fm504_scan_all_record(Fm504App* app, const char* bank, const char* v
 
     /* Do not create phantom entries from TID/USER without a known EPC anchor. */
     if(app->scan_all_count == 0) return;
+    if(app->scan_all_selected >= app->scan_all_count) app->scan_all_selected = app->scan_all_count - 1;
 
     ScanAllEntry* e = &app->scan_all_entries[app->scan_all_selected];
     if(strcmp(bank, "TID") == 0) {
@@ -256,7 +266,7 @@ static void fm504_scan_all_build_preview(const Fm504App* app, char* out, size_t 
     snprintf(
         out,
         out_cap,
-        "E:%.18s\nT:%.18s\nU:%.18s",
+        "E:%s\nT:%s\nU:%s",
         (e->epc[0] != '\0') ? e->epc : "No EPC",
         (e->tid[0] != '\0') ? e->tid : "No TID",
         (e->user[0] != '\0') ? e->user : "No USER");
@@ -395,6 +405,90 @@ static bool fm504_attempt_write_epc(Fm504App* app, const char* epc_hex, char* de
     return ok;
 }
 
+static bool fm504_is_even_hex_max64(const char* s) {
+    if(!s) return false;
+    size_t n = strlen(s);
+    if(n == 0 || n > 64 || (n % 2) != 0) return false;
+    for(size_t i = 0; i < n; i++) {
+        char c = s[i];
+        bool hex = ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'));
+        if(!hex) return false;
+    }
+    return true;
+}
+
+static void fm504_uppercase_hex(char* s) {
+    if(!s) return;
+    for(size_t i = 0; s[i] != '\0'; i++) {
+        if(s[i] >= 'a' && s[i] <= 'f') s[i] = (char)(s[i] - 'a' + 'A');
+    }
+}
+
+static bool fm504_attempt_write_user(
+    Fm504App* app,
+    const char* user_hex,
+    uint8_t addr_words,
+    char* detail,
+    size_t detail_cap) {
+    if(!app || !app->driver || !user_hex) return false;
+    if(detail && detail_cap) detail[0] = '\0';
+
+    (void)rfid_driver_set_enabled(app->driver, true);
+    furi_delay_ms(120);
+    (void)rfid_driver_set_tx_power(app->driver, app->tx_power_db);
+
+    bool access_failed = false;
+    char access_note[64] = {0};
+    if(app->use_access_password) {
+        char access_detail[64];
+        if(!rfid_driver_access_pwd(
+               app->driver, app->access_password, access_detail, sizeof(access_detail))) {
+            access_failed = true;
+            snprintf(
+                access_note,
+                sizeof(access_note),
+                "Access failed -> fallback (%.34s)",
+                access_detail[0] ? access_detail : "no detail");
+        }
+    }
+
+    bool ok = false;
+    char local_detail[64];
+    for(size_t i = 0; i < 3; i++) {
+        if(rfid_driver_write_user_ex(
+               app->driver, addr_words, user_hex, local_detail, sizeof(local_detail))) {
+            ok = true;
+            if(detail && detail_cap) {
+                if(access_failed) {
+                    snprintf(detail, detail_cap, "%.34s; %.26s", access_note, local_detail);
+                } else {
+                    strncpy(detail, local_detail, detail_cap - 1);
+                    detail[detail_cap - 1] = '\0';
+                }
+            }
+            break;
+        }
+        if(detail && detail_cap) {
+            if(access_failed) {
+                snprintf(detail, detail_cap, "%.26s; write: %.24s", access_note, local_detail);
+            } else {
+                strncpy(detail, local_detail, detail_cap - 1);
+                detail[detail_cap - 1] = '\0';
+            }
+        }
+        furi_delay_ms(90);
+    }
+
+    rfid_driver_set_enabled(app->driver, false);
+    return ok;
+}
+
+static void fm504_saved_tags_load(Fm504App* app) {
+    if(!app) return;
+    app->saved_tags_count = storage_saved_tags_load(app->saved_tags, MAX_TAGS);
+    if(app->saved_selected_idx >= app->saved_tags_count) app->saved_selected_idx = 0;
+}
+
 static void fm504_draw_lock_icon(Widget* widget, bool locked) {
     if(!widget) return;
 
@@ -526,6 +620,17 @@ static void fm504_protection_button_callback(GuiButtonType button, InputType typ
     view_dispatcher_send_custom_event(app->view_dispatcher, event);
 }
 
+static void fm504_saved_tag_button_callback(GuiButtonType button, InputType type, void* context) {
+    if(type != InputTypeShort) return;
+    Fm504App* app = context;
+    if(!app || app->closing || !app->view_dispatcher) return;
+
+    uint32_t event = EventSavedTagBack;
+    if(button == GuiButtonTypeLeft) event = EventSavedTagDelete;
+    else if(button == GuiButtonTypeRight) event = EventSavedTagClearAll;
+    view_dispatcher_send_custom_event(app->view_dispatcher, event);
+}
+
 static bool fm504_clone_capture_source(Fm504App* app) {
     if(!app || !app->driver) return false;
 
@@ -563,7 +668,13 @@ static bool fm504_clone_capture_source(Fm504App* app) {
     return true;
 }
 
-static bool fm504_capture_single_epc(Fm504App* app, char* out_epc, size_t out_cap) {
+static bool fm504_capture_single_epc_with_params(
+    Fm504App* app,
+    char* out_epc,
+    size_t out_cap,
+    size_t tries,
+    uint32_t warmup_ms,
+    uint32_t step_ms) {
     if(!app || !app->driver || !out_epc || out_cap < 2) return false;
 
     RfidScanMode prev_mode = app->scan_mode;
@@ -579,12 +690,12 @@ static bool fm504_capture_single_epc(Fm504App* app, char* out_epc, size_t out_ca
         return false;
     }
 
-    furi_delay_ms(120);
+    furi_delay_ms(warmup_ms);
     (void)rfid_driver_set_tx_power(app->driver, app->tx_power_db);
 
     bool ok = false;
     RfidTagRead tag = {0};
-    for(size_t i = 0; i < 12; i++) {
+    for(size_t i = 0; i < tries; i++) {
         if(rfid_driver_scan_once(app->driver, &tag) && tag.primary_hex[0] != '\0') {
             strncpy(out_epc, tag.primary_hex, out_cap - 1);
             out_epc[out_cap - 1] = '\0';
@@ -593,7 +704,7 @@ static bool fm504_capture_single_epc(Fm504App* app, char* out_epc, size_t out_ca
             ok = true;
             break;
         }
-        furi_delay_ms(60);
+        furi_delay_ms(step_ms);
     }
 
     rfid_driver_set_enabled(app->driver, false);
@@ -607,11 +718,7 @@ static void fm504_run_protection_check(Fm504App* app) {
     if(!app) return;
 
     app->protection_epc[0] = '\0';
-    snprintf(app->protection_status, sizeof(app->protection_status), "CHECKING...");
-    snprintf(app->protection_detail, sizeof(app->protection_detail), "Reading EPC...");
-    fm504_switch_view(app, ViewIdProtection);
-
-    if(!fm504_capture_single_epc(app, app->protection_epc, sizeof(app->protection_epc))) {
+    if(!fm504_capture_single_epc_with_params(app, app->protection_epc, sizeof(app->protection_epc), 30, 180, 80)) {
         snprintf(app->protection_status, sizeof(app->protection_status), "NO TAG");
         snprintf(app->protection_detail, sizeof(app->protection_detail), "No EPC detected");
         return;
@@ -721,22 +828,86 @@ static void fm504_refresh_clone_result_view(Fm504App* app) {
         app);
 }
 
+static bool fm504_is_checking_status(const char* s) {
+    if(!s) return false;
+    return strncmp(s, "CHECKING", 8) == 0;
+}
+
+static void fm504_add_detecting_art(Widget* w) {
+    if(!w) return;
+    /* Head contour (closer to Flipper dolphin profile) */
+    widget_add_line_element(w, 4, 34, 10, 26);
+    widget_add_line_element(w, 10, 26, 18, 20);
+    widget_add_line_element(w, 18, 20, 30, 18);
+    widget_add_line_element(w, 30, 18, 44, 22);
+    widget_add_line_element(w, 44, 22, 54, 30);
+    widget_add_line_element(w, 54, 30, 52, 36);
+    widget_add_line_element(w, 52, 36, 44, 40);
+    widget_add_line_element(w, 44, 40, 28, 42);
+    widget_add_line_element(w, 28, 42, 14, 40);
+    widget_add_line_element(w, 14, 40, 4, 34);
+
+    /* Snout / jaw */
+    widget_add_line_element(w, 38, 34, 70, 34);
+    widget_add_line_element(w, 70, 34, 78, 30);
+    widget_add_line_element(w, 78, 30, 74, 26);
+    widget_add_line_element(w, 74, 26, 66, 24);
+    widget_add_line_element(w, 66, 24, 52, 24);
+    widget_add_line_element(w, 52, 24, 42, 28);
+
+    /* Lower arc */
+    widget_add_line_element(w, 30, 42, 44, 48);
+    widget_add_line_element(w, 44, 48, 60, 49);
+    widget_add_line_element(w, 60, 49, 74, 46);
+
+    /* Eye */
+    widget_add_circle_element(w, 24, 30, 6, false);
+    widget_add_rect_element(w, 23, 29, 2, 2, 1, true);
+
+    /* Top fin / back */
+    widget_add_line_element(w, 16, 22, 22, 14);
+    widget_add_line_element(w, 22, 14, 34, 14);
+    widget_add_line_element(w, 34, 14, 28, 20);
+
+    /* RFID chip + waves */
+    widget_add_rect_element(w, 96, 16, 11, 11, 1, false);
+    widget_add_line_element(w, 99, 14, 99, 16);
+    widget_add_line_element(w, 103, 14, 103, 16);
+    widget_add_line_element(w, 107, 14, 107, 16);
+    widget_add_line_element(w, 96, 28, 96, 30);
+    widget_add_line_element(w, 101, 28, 101, 30);
+    widget_add_line_element(w, 106, 28, 106, 30);
+    widget_add_line_element(w, 88, 16, 92, 19);
+    widget_add_line_element(w, 85, 21, 91, 21);
+    widget_add_line_element(w, 88, 26, 92, 23);
+}
+
 static void fm504_refresh_protection_view(Fm504App* app) {
     if(!app || !app->protection_widget) return;
     widget_reset(app->protection_widget);
 
-    widget_add_string_element(
-        app->protection_widget, 2, 2, AlignLeft, AlignTop, FontPrimary, "Check Protection");
-    widget_add_string_element(
-        app->protection_widget, 2, 16, AlignLeft, AlignTop, FontSecondary, app->protection_status);
-    widget_add_text_box_element(
-        app->protection_widget, 2, 26, 124, 14, AlignLeft, AlignTop, app->protection_epc, true);
-    widget_add_text_box_element(
-        app->protection_widget, 2, 42, 124, 14, AlignLeft, AlignTop, app->protection_detail, true);
-    widget_add_button_element(
-        app->protection_widget, GuiButtonTypeLeft, "Back", fm504_protection_button_callback, app);
-    widget_add_button_element(
-        app->protection_widget, GuiButtonTypeCenter, "Check", fm504_protection_button_callback, app);
+    if(fm504_is_checking_status(app->protection_status)) {
+        fm504_add_detecting_art(app->protection_widget);
+        widget_add_string_element(
+            app->protection_widget, 62, 34, AlignLeft, AlignTop, FontPrimary, "Detecting");
+        widget_add_string_element(
+            app->protection_widget, 62, 46, AlignLeft, AlignTop, FontPrimary, "[UHF] RFID");
+        widget_add_button_element(
+            app->protection_widget, GuiButtonTypeLeft, "Back", fm504_protection_button_callback, app);
+    } else {
+        widget_add_string_element(
+            app->protection_widget, 2, 2, AlignLeft, AlignTop, FontPrimary, "Check Protection");
+        widget_add_string_element(
+            app->protection_widget, 2, 16, AlignLeft, AlignTop, FontSecondary, app->protection_status);
+        widget_add_text_box_element(
+            app->protection_widget, 2, 26, 124, 14, AlignLeft, AlignTop, app->protection_epc, true);
+        widget_add_text_box_element(
+            app->protection_widget, 2, 42, 124, 14, AlignLeft, AlignTop, app->protection_detail, true);
+        widget_add_button_element(
+            app->protection_widget, GuiButtonTypeLeft, "Back", fm504_protection_button_callback, app);
+        widget_add_button_element(
+            app->protection_widget, GuiButtonTypeCenter, "Check", fm504_protection_button_callback, app);
+    }
 }
 
 static void fm504_build_scan_preview_line(const char* in, char* out, size_t out_cap) {
@@ -809,12 +980,14 @@ static void fm504_refresh_scan_view(Fm504App* app) {
     }
     if(app->scan_mode != RfidScanModeAll) {
         fm504_build_scan_preview_line(line_value, app->scan_preview_line, sizeof(app->scan_preview_line));
+        widget_add_text_box_element(
+            app->scan_widget, 2, 26, 124, 28, AlignLeft, AlignTop, app->scan_preview_line, true);
+    } else {
+        widget_add_text_scroll_element(app->scan_widget, 2, 26, 124, 28, app->scan_preview_line);
     }
 
     widget_add_string_element(app->scan_widget, 2, 4, AlignLeft, AlignTop, FontPrimary, app->scan_mode_line);
     widget_add_string_element(app->scan_widget, 2, 16, AlignLeft, AlignTop, FontSecondary, qty_line);
-    widget_add_text_box_element(
-        app->scan_widget, 2, 26, 124, 28, AlignLeft, AlignTop, app->scan_preview_line, true);
 
     widget_add_button_element(app->scan_widget, GuiButtonTypeLeft, left_label, fm504_scan_button_callback, app);
     widget_add_button_element(
@@ -838,7 +1011,7 @@ static void fm504_refresh_about(Fm504App* app) {
         AlignTop,
         "FlippeRFID for Flipper Zero\n"
         "Project: EPC/TID R/W\n"
-        "Author: Fernando García Villarroel",
+        "Author:\n Fernando García Villarroel",
         true);
 }
 
@@ -886,6 +1059,12 @@ static void fm504_write_done_callback(void* context) {
     Fm504App* app = context;
     if(!app || app->closing || !app->view_dispatcher) return;
     view_dispatcher_send_custom_event(app->view_dispatcher, EventWriteCommit);
+}
+
+static void fm504_write_user_done_callback(void* context) {
+    Fm504App* app = context;
+    if(!app || app->closing || !app->view_dispatcher) return;
+    view_dispatcher_send_custom_event(app->view_dispatcher, EventWriteUserCommit);
 }
 
 static void fm504_access_pwd_done_callback(void* context) {
@@ -955,6 +1134,55 @@ static void fm504_build_write_select_menu(Fm504App* app) {
             fm504_submenu_event,
             app);
     }
+}
+
+static void fm504_build_saved_tags_menu(Fm504App* app) {
+    if(!app || !app->saved_tags_menu) return;
+    fm504_saved_tags_load(app);
+    submenu_reset(app->saved_tags_menu);
+    submenu_set_header(app->saved_tags_menu, "Saved Tags");
+
+    if(app->saved_tags_count == 0) {
+        submenu_add_item(app->saved_tags_menu, "No saved tags", EventSavedSelectBase, fm504_submenu_event, app);
+        return;
+    }
+
+    char label[56];
+    for(size_t i = 0; i < app->saved_tags_count; i++) {
+        const char* epc = app->saved_tags[i].epc[0] ? app->saved_tags[i].epc : "NO EPC";
+        snprintf(label, sizeof(label), "%u) %.32s", (unsigned)(i + 1), epc);
+        submenu_add_item(
+            app->saved_tags_menu, label, EventSavedSelectBase + (uint32_t)i, fm504_submenu_event, app);
+    }
+    submenu_set_selected_item(app->saved_tags_menu, EventSavedSelectBase + (uint32_t)app->saved_selected_idx);
+}
+
+static void fm504_refresh_saved_tag_view(Fm504App* app) {
+    if(!app || !app->saved_tag_widget) return;
+    widget_reset(app->saved_tag_widget);
+    widget_add_string_element(app->saved_tag_widget, 2, 2, AlignLeft, AlignTop, FontPrimary, "Saved Tag");
+
+    if(app->saved_tags_count == 0 || app->saved_selected_idx >= app->saved_tags_count) {
+        widget_add_text_box_element(
+            app->saved_tag_widget, 2, 16, 124, 30, AlignLeft, AlignTop, "No saved tags", true);
+    } else {
+        const SavedUhfTag* t = &app->saved_tags[app->saved_selected_idx];
+        snprintf(
+            app->saved_tag_text,
+            sizeof(app->saved_tag_text),
+            "E:%s\nT:%s\nU:%s",
+            t->epc[0] ? t->epc : "NO EPC",
+            t->tid[0] ? t->tid : "NO TID",
+            t->user[0] ? t->user : "NO USER");
+        widget_add_text_scroll_element(app->saved_tag_widget, 2, 16, 124, 34, app->saved_tag_text);
+    }
+
+    widget_add_button_element(
+        app->saved_tag_widget, GuiButtonTypeLeft, "Delete", fm504_saved_tag_button_callback, app);
+    widget_add_button_element(
+        app->saved_tag_widget, GuiButtonTypeCenter, "Back", fm504_saved_tag_button_callback, app);
+    widget_add_button_element(
+        app->saved_tag_widget, GuiButtonTypeRight, "Clear", fm504_saved_tag_button_callback, app);
 }
 
 static void fm504_build_read_mode_menu(Fm504App* app) {
@@ -1084,6 +1312,18 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
         return true;
     }
 
+    if(event >= EventSavedSelectBase && event < EventSavedSelectBase + MAX_TAGS) {
+        size_t idx = (size_t)(event - EventSavedSelectBase);
+        if(idx >= app->saved_tags_count) {
+            fm504_switch_view(app, ViewIdSavedTags);
+            return true;
+        }
+        app->saved_selected_idx = idx;
+        fm504_refresh_saved_tag_view(app);
+        fm504_switch_view(app, ViewIdSavedTagDetail);
+        return true;
+    }
+
     switch(event) {
     case MainActionScan:
         fm504_refresh_scan_view(app);
@@ -1091,8 +1331,38 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
         return true;
 
     case MainActionWriteTag:
+        app->write_user_mode = false;
         fm504_build_write_select_menu(app);
         fm504_switch_view(app, ViewIdWriteSelect);
+        return true;
+
+    case MainActionWriteUser:
+        app->write_user_mode = true;
+        fm504_saved_tags_load(app);
+        app->write_user_buffer[0] = '\0';
+        if(app->saved_tags_count > 0 && app->saved_selected_idx < app->saved_tags_count) {
+            strncpy(
+                app->write_user_buffer,
+                app->saved_tags[app->saved_selected_idx].user,
+                sizeof(app->write_user_buffer) - 1);
+            app->write_user_buffer[sizeof(app->write_user_buffer) - 1] = '\0';
+        }
+        if(app->write_user_buffer[0] == '\0') snprintf(app->write_user_buffer, sizeof(app->write_user_buffer), "0000");
+        text_input_reset(app->write_input);
+        text_input_set_header_text(app->write_input, "Edit USER HEX");
+        text_input_set_result_callback(
+            app->write_input,
+            fm504_write_user_done_callback,
+            app,
+            app->write_user_buffer,
+            sizeof(app->write_user_buffer),
+            false);
+        fm504_switch_view(app, ViewIdWriteInput);
+        return true;
+
+    case MainActionSavedTags:
+        fm504_build_saved_tags_menu(app);
+        fm504_switch_view(app, ViewIdSavedTags);
         return true;
 
     case MainActionAccessPassword:
@@ -1211,6 +1481,7 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
         app->scan_mode = RfidScanModeAll;
         app->scan_all_step = 0;
         app->scan_view_tab = 0;
+        fm504_scan_all_reset(app);
         fm504_apply_scan_mode_to_driver(app);
         fm504_persist_settings(app);
         snprintf(app->status_msg, sizeof(app->status_msg), "Read mode: ALL");
@@ -1315,12 +1586,35 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
         return true;
 
     case EventScanSave:
-        storage_tags_save(app->tags, app->tags_count, app->status_msg, sizeof(app->status_msg));
-        snprintf(
-            app->scan_last_line,
-            sizeof(app->scan_last_line),
-            "Saved: %u tags",
-            (unsigned)app->tags_count);
+        if(app->scan_mode == RfidScanModeAll && app->scan_all_count > 0) {
+            size_t n = (app->scan_all_count < MAX_TAGS) ? app->scan_all_count : MAX_TAGS;
+            for(size_t i = 0; i < n; i++) {
+                snprintf(app->saved_tags[i].epc, sizeof(app->saved_tags[i].epc), "%s", app->scan_all_entries[i].epc);
+                snprintf(app->saved_tags[i].tid, sizeof(app->saved_tags[i].tid), "%s", app->scan_all_entries[i].tid);
+                snprintf(app->saved_tags[i].user, sizeof(app->saved_tags[i].user), "%s", app->scan_all_entries[i].user);
+            }
+            if(storage_saved_tags_save(app->saved_tags, n)) {
+                snprintf(app->status_msg, sizeof(app->status_msg), "Saved: %u tags", (unsigned)n);
+                snprintf(app->scan_last_line, sizeof(app->scan_last_line), "Saved: %u tags", (unsigned)n);
+            } else {
+                snprintf(app->status_msg, sizeof(app->status_msg), "Save error");
+                snprintf(app->scan_last_line, sizeof(app->scan_last_line), "Save error");
+            }
+        } else {
+            size_t n = (app->tags_count < MAX_TAGS) ? app->tags_count : MAX_TAGS;
+            for(size_t i = 0; i < n; i++) {
+                snprintf(app->saved_tags[i].epc, sizeof(app->saved_tags[i].epc), "%s", app->tags[i].primary_hex);
+                app->saved_tags[i].tid[0] = '\0';
+                app->saved_tags[i].user[0] = '\0';
+            }
+            if(storage_saved_tags_save(app->saved_tags, n)) {
+                snprintf(app->status_msg, sizeof(app->status_msg), "Saved: %u tags", (unsigned)n);
+                snprintf(app->scan_last_line, sizeof(app->scan_last_line), "Saved: %u tags", (unsigned)n);
+            } else {
+                snprintf(app->status_msg, sizeof(app->status_msg), "Save error");
+                snprintf(app->scan_last_line, sizeof(app->scan_last_line), "Save error");
+            }
+        }
         fm504_refresh_scan_view(app);
         return true;
 
@@ -1447,6 +1741,14 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
         return true;
 
     case EventProtectionRun:
+        snprintf(app->protection_status, sizeof(app->protection_status), "CHECKING...");
+        app->protection_epc[0] = '\0';
+        snprintf(app->protection_detail, sizeof(app->protection_detail), "Reading EPC...");
+        fm504_refresh_protection_view(app);
+        view_dispatcher_send_custom_event(app->view_dispatcher, EventProtectionDo);
+        return true;
+
+    case EventProtectionDo:
         fm504_run_protection_check(app);
         fm504_refresh_protection_view(app);
         return true;
@@ -1457,43 +1759,58 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
 
     case EventScanTick:
         if(app->scan_running) {
-            if(app->scan_mode == RfidScanModeAll || app->scan_mode == RfidScanModeUser) {
-                fm504_apply_scan_mode_to_driver(app);
-            }
-            RfidTagRead tag = {0};
-            if(rfid_driver_scan_once(app->driver, &tag)) {
-                const char* read_label =
-                    (app->scan_mode == RfidScanModeAll)
-                        ? fm504_scan_mode_all_step_name(app->scan_all_step)
-                        : fm504_scan_mode_name(app->scan_mode);
-                bool is_new = false;
-                if(app->scan_mode == RfidScanModeAll) {
-                    fm504_scan_all_record(app, read_label, tag.primary_hex);
-                    if(strcmp(read_label, "EPC") == 0) {
-                        is_new = fm504_add_or_update_tag(app, &tag);
-                    }
-                } else {
-                    is_new = fm504_add_or_update_tag(app, &tag);
-                }
-                if(is_new) fm504_vibro_read(app);
-                snprintf(app->status_msg, sizeof(app->status_msg), "%s: %s", read_label, tag.primary_hex);
-                snprintf(app->scan_last_line, sizeof(app->scan_last_line), "%s", tag.primary_hex);
-                if(strcmp(read_label, "EPC") == 0) {
-                    snprintf(app->scan_last_epc, sizeof(app->scan_last_epc), "%s", tag.primary_hex);
-                } else if(strcmp(read_label, "TID") == 0) {
-                    snprintf(app->scan_last_tid, sizeof(app->scan_last_tid), "%s", tag.primary_hex);
-                } else if(strcmp(read_label, "USER") == 0) {
-                    snprintf(app->scan_last_user, sizeof(app->scan_last_user), "%s", tag.primary_hex);
-                }
-                if(app->current_view == ViewIdScan) fm504_refresh_scan_view(app);
-            }
             if(app->scan_mode == RfidScanModeAll) {
-                app->scan_all_step = (uint8_t)((app->scan_all_step + 1U) % 3U);
+                RfidTagRead epc_tag = {0};
+                rfid_driver_set_mode(app->driver, RfidScanModeEpc);
+                if(rfid_driver_scan_once(app->driver, &epc_tag) && epc_tag.primary_hex[0] != '\0') {
+                    bool is_new = fm504_add_or_update_tag(app, &epc_tag);
+                    fm504_scan_all_record(app, "EPC", epc_tag.primary_hex);
+                    snprintf(app->scan_last_epc, sizeof(app->scan_last_epc), "%s", epc_tag.primary_hex);
+                    snprintf(app->scan_last_line, sizeof(app->scan_last_line), "%s", epc_tag.primary_hex);
+                    if(is_new) fm504_vibro_read(app);
+
+                    RfidTagRead tid_tag = {0};
+                    rfid_driver_set_mode(app->driver, RfidScanModeTid);
+                    if(rfid_driver_scan_once(app->driver, &tid_tag) && tid_tag.primary_hex[0] != '\0') {
+                        fm504_scan_all_record(app, "TID", tid_tag.primary_hex);
+                        snprintf(app->scan_last_tid, sizeof(app->scan_last_tid), "%s", tid_tag.primary_hex);
+                    }
+
+                    RfidTagRead user_tag = {0};
+                    rfid_driver_set_mode(app->driver, RfidScanModeUser);
+                    if(rfid_driver_scan_once(app->driver, &user_tag) && user_tag.primary_hex[0] != '\0') {
+                        fm504_scan_all_record(app, "USER", user_tag.primary_hex);
+                        snprintf(app->scan_last_user, sizeof(app->scan_last_user), "%s", user_tag.primary_hex);
+                    }
+
+                    snprintf(app->status_msg, sizeof(app->status_msg), "ALL: %s", epc_tag.primary_hex);
+                }
+                rfid_driver_set_mode(app->driver, RfidScanModeEpc);
+                if(app->current_view == ViewIdScan) fm504_refresh_scan_view(app);
+            } else {
+                if(app->scan_mode == RfidScanModeUser) fm504_apply_scan_mode_to_driver(app);
+                RfidTagRead tag = {0};
+                if(rfid_driver_scan_once(app->driver, &tag)) {
+                    bool is_new = fm504_add_or_update_tag(app, &tag);
+                    if(is_new) fm504_vibro_read(app);
+                    const char* read_label = fm504_scan_mode_name(app->scan_mode);
+                    snprintf(app->status_msg, sizeof(app->status_msg), "%s: %s", read_label, tag.primary_hex);
+                    snprintf(app->scan_last_line, sizeof(app->scan_last_line), "%s", tag.primary_hex);
+                    if(strcmp(read_label, "EPC") == 0) {
+                        snprintf(app->scan_last_epc, sizeof(app->scan_last_epc), "%s", tag.primary_hex);
+                    } else if(strcmp(read_label, "TID") == 0) {
+                        snprintf(app->scan_last_tid, sizeof(app->scan_last_tid), "%s", tag.primary_hex);
+                    } else if(strcmp(read_label, "USER") == 0) {
+                        snprintf(app->scan_last_user, sizeof(app->scan_last_user), "%s", tag.primary_hex);
+                    }
+                    if(app->current_view == ViewIdScan) fm504_refresh_scan_view(app);
+                }
             }
         }
         return true;
 
     case EventWriteCommit: {
+        app->last_write_is_user = false;
         char normalized[33];
         if(!rfid_driver_normalize_epc(app->write_buffer, normalized, sizeof(normalized))) {
             snprintf(app->status_msg, sizeof(app->status_msg), "Invalid EPC");
@@ -1516,6 +1833,39 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
             fm504_switch_view(app, ViewIdWriteConfirm);
             return true;
         }
+    }
+
+    case EventWriteUserCommit: {
+        fm504_uppercase_hex(app->write_user_buffer);
+        app->last_write_is_user = true;
+        if(!fm504_is_even_hex_max64(app->write_user_buffer)) {
+            snprintf(app->status_msg, sizeof(app->status_msg), "Invalid USER (HEX even, <=64)");
+            snprintf(app->last_write_epc, sizeof(app->last_write_epc), "USER");
+            snprintf(app->last_write_user, sizeof(app->last_write_user), "%s", app->write_user_buffer);
+            snprintf(app->last_write_detail, sizeof(app->last_write_detail), "Invalid USER format");
+            app->last_write_ok = false;
+            fm504_refresh_write_result_view(app);
+            fm504_switch_view(app, ViewIdWriteResult);
+            return true;
+        }
+
+        char detail[64];
+        snprintf(app->last_write_user, sizeof(app->last_write_user), "%s", app->write_user_buffer);
+        if(fm504_attempt_write_user(app, app->write_user_buffer, 0, detail, sizeof(detail))) {
+            snprintf(app->status_msg, sizeof(app->status_msg), "USER written");
+            snprintf(app->last_write_epc, sizeof(app->last_write_epc), "USER");
+            snprintf(app->last_write_detail, sizeof(app->last_write_detail), "%s", detail);
+            app->last_write_ok = true;
+            fm504_vibro_write_ok(app);
+        } else {
+            snprintf(app->status_msg, sizeof(app->status_msg), "Write USER failed: %.44s", detail);
+            snprintf(app->last_write_epc, sizeof(app->last_write_epc), "USER");
+            snprintf(app->last_write_detail, sizeof(app->last_write_detail), "%s", detail);
+            app->last_write_ok = false;
+        }
+        fm504_refresh_write_result_view(app);
+        fm504_switch_view(app, ViewIdWriteResult);
+        return true;
     }
 
     case EventWriteDo: {
@@ -1576,7 +1926,30 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
 
     case EventWriteRetry: {
         char write_detail[64];
-        if(app->last_write_epc[0] == '\0') {
+        if(app->last_write_is_user) {
+            if(app->last_write_user[0] == '\0') {
+                snprintf(app->last_write_detail, sizeof(app->last_write_detail), "No USER to retry");
+                app->last_write_ok = false;
+            } else if(fm504_attempt_write_user(
+                          app, app->last_write_user, 0, write_detail, sizeof(write_detail))) {
+                snprintf(app->status_msg, sizeof(app->status_msg), "USER written");
+                snprintf(app->last_write_detail, sizeof(app->last_write_detail), "%s", write_detail);
+                app->last_write_ok = true;
+                fm504_vibro_write_ok(app);
+            } else {
+                snprintf(
+                    app->status_msg,
+                    sizeof(app->status_msg),
+                    "Write USER failed: %.40s",
+                    write_detail[0] ? write_detail : "No detail");
+                snprintf(
+                    app->last_write_detail,
+                    sizeof(app->last_write_detail),
+                    "%s",
+                    write_detail[0] ? write_detail : "No detail");
+                app->last_write_ok = false;
+            }
+        } else if(app->last_write_epc[0] == '\0') {
             snprintf(app->last_write_detail, sizeof(app->last_write_detail), "No EPC to retry");
             app->last_write_ok = false;
         } else if(fm504_attempt_write_epc(app, app->last_write_epc, write_detail, sizeof(write_detail))) {
@@ -1600,6 +1973,30 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
         fm504_refresh_write_result_view(app);
         return true;
     }
+
+    case EventSavedTagBack:
+        fm504_build_saved_tags_menu(app);
+        fm504_switch_view(app, ViewIdSavedTags);
+        return true;
+
+    case EventSavedTagDelete:
+        if(app->saved_selected_idx < app->saved_tags_count) {
+            (void)storage_saved_tags_delete(app->saved_selected_idx);
+            fm504_saved_tags_load(app);
+            if(app->saved_selected_idx >= app->saved_tags_count && app->saved_tags_count > 0) {
+                app->saved_selected_idx = app->saved_tags_count - 1;
+            }
+        }
+        fm504_build_saved_tags_menu(app);
+        fm504_switch_view(app, ViewIdSavedTags);
+        return true;
+
+    case EventSavedTagClearAll:
+        (void)storage_saved_tags_clear();
+        fm504_saved_tags_load(app);
+        fm504_build_saved_tags_menu(app);
+        fm504_switch_view(app, ViewIdSavedTags);
+        return true;
 
     case EventWriteBack:
         fm504_switch_view(app, ViewIdMainMenu);
@@ -1627,8 +2024,11 @@ static Fm504App* fm504_app_alloc(void) {
     snprintf(app->scan_last_user, sizeof(app->scan_last_user), "No reads");
     app->scan_view_tab = 0;
     app->last_write_epc[0] = '\0';
+    app->last_write_user[0] = '\0';
+    app->write_user_buffer[0] = '\0';
     app->last_write_detail[0] = '\0';
     app->last_write_ok = false;
+    app->last_write_is_user = false;
     app->use_access_password = false;
     snprintf(app->access_password, sizeof(app->access_password), "00000000");
     app->access_input_buffer[0] = '\0';
@@ -1673,10 +2073,12 @@ static Fm504App* fm504_app_alloc(void) {
     app->config_menu = submenu_alloc();
     app->scan_widget = widget_alloc();
     app->write_select_menu = submenu_alloc();
+    app->saved_tags_menu = submenu_alloc();
     app->write_input = text_input_alloc();
     app->access_input = text_input_alloc();
     app->write_confirm_widget = widget_alloc();
     app->write_result_widget = widget_alloc();
+    app->saved_tag_widget = widget_alloc();
     app->clone_source_widget = widget_alloc();
     app->clone_target_widget = widget_alloc();
     app->clone_result_widget = widget_alloc();
@@ -1691,8 +2093,9 @@ static Fm504App* fm504_app_alloc(void) {
     app->notification = furi_record_open(RECORD_NOTIFICATION);
 
     if(!app->view_dispatcher || !app->main_menu || !app->config_menu || !app->scan_widget || !app->write_select_menu ||
+       !app->saved_tags_menu ||
        !app->write_input || !app->access_input || !app->write_confirm_widget ||
-       !app->write_result_widget || !app->clone_source_widget ||
+       !app->write_result_widget || !app->saved_tag_widget || !app->clone_source_widget ||
        !app->clone_target_widget || !app->clone_result_widget || !app->protection_widget ||
        !app->module_menu ||
        !app->read_mode_menu || !app->tx_power_menu || !app->read_rate_menu || !app->about_widget ||
@@ -1707,6 +2110,8 @@ static Fm504App* fm504_app_alloc(void) {
     submenu_set_header(app->main_menu, "FlippeRFID");
     submenu_add_item(app->main_menu, "Scan", MainActionScan, fm504_submenu_event, app);
     submenu_add_item(app->main_menu, "Write Tag", MainActionWriteTag, fm504_submenu_event, app);
+    submenu_add_item(app->main_menu, "Write USER", MainActionWriteUser, fm504_submenu_event, app);
+    submenu_add_item(app->main_menu, "Saved Tags", MainActionSavedTags, fm504_submenu_event, app);
     submenu_add_item(app->main_menu, "Clone", MainActionClone, fm504_submenu_event, app);
     submenu_add_item(
         app->main_menu, "Check Protection", MainActionCheckProtection, fm504_submenu_event, app);
@@ -1717,10 +2122,12 @@ static Fm504App* fm504_app_alloc(void) {
     view_set_previous_callback(submenu_get_view(app->config_menu), fm504_prev_to_main_callback);
     view_set_previous_callback(widget_get_view(app->scan_widget), fm504_prev_to_main_callback);
     view_set_previous_callback(submenu_get_view(app->write_select_menu), fm504_prev_to_main_callback);
+    view_set_previous_callback(submenu_get_view(app->saved_tags_menu), fm504_prev_to_main_callback);
     view_set_previous_callback(text_input_get_view(app->write_input), fm504_prev_to_main_callback);
     view_set_previous_callback(text_input_get_view(app->access_input), fm504_prev_to_main_callback);
     view_set_previous_callback(widget_get_view(app->write_confirm_widget), fm504_prev_to_main_callback);
     view_set_previous_callback(widget_get_view(app->write_result_widget), fm504_prev_to_main_callback);
+    view_set_previous_callback(widget_get_view(app->saved_tag_widget), fm504_prev_to_main_callback);
     view_set_previous_callback(widget_get_view(app->clone_source_widget), fm504_prev_to_main_callback);
     view_set_previous_callback(widget_get_view(app->clone_target_widget), fm504_prev_to_main_callback);
     view_set_previous_callback(widget_get_view(app->clone_result_widget), fm504_prev_to_main_callback);
@@ -1735,12 +2142,15 @@ static Fm504App* fm504_app_alloc(void) {
     view_dispatcher_add_view(app->view_dispatcher, ViewIdConfig, submenu_get_view(app->config_menu));
     view_dispatcher_add_view(app->view_dispatcher, ViewIdScan, widget_get_view(app->scan_widget));
     view_dispatcher_add_view(app->view_dispatcher, ViewIdWriteSelect, submenu_get_view(app->write_select_menu));
+    view_dispatcher_add_view(app->view_dispatcher, ViewIdSavedTags, submenu_get_view(app->saved_tags_menu));
     view_dispatcher_add_view(app->view_dispatcher, ViewIdWriteInput, text_input_get_view(app->write_input));
     view_dispatcher_add_view(
         app->view_dispatcher, ViewIdAccessPassword, text_input_get_view(app->access_input));
     view_dispatcher_add_view(
         app->view_dispatcher, ViewIdWriteConfirm, widget_get_view(app->write_confirm_widget));
     view_dispatcher_add_view(app->view_dispatcher, ViewIdWriteResult, widget_get_view(app->write_result_widget));
+    view_dispatcher_add_view(
+        app->view_dispatcher, ViewIdSavedTagDetail, widget_get_view(app->saved_tag_widget));
     view_dispatcher_add_view(app->view_dispatcher, ViewIdCloneSource, widget_get_view(app->clone_source_widget));
     view_dispatcher_add_view(app->view_dispatcher, ViewIdCloneTarget, widget_get_view(app->clone_target_widget));
     view_dispatcher_add_view(app->view_dispatcher, ViewIdCloneResult, widget_get_view(app->clone_result_widget));
@@ -1768,10 +2178,12 @@ static void fm504_app_free(Fm504App* app) {
     if(app->view_dispatcher) view_dispatcher_remove_view(app->view_dispatcher, ViewIdConfig);
     if(app->view_dispatcher) view_dispatcher_remove_view(app->view_dispatcher, ViewIdScan);
     if(app->view_dispatcher) view_dispatcher_remove_view(app->view_dispatcher, ViewIdWriteSelect);
+    if(app->view_dispatcher) view_dispatcher_remove_view(app->view_dispatcher, ViewIdSavedTags);
     if(app->view_dispatcher) view_dispatcher_remove_view(app->view_dispatcher, ViewIdWriteInput);
     if(app->view_dispatcher) view_dispatcher_remove_view(app->view_dispatcher, ViewIdAccessPassword);
     if(app->view_dispatcher) view_dispatcher_remove_view(app->view_dispatcher, ViewIdWriteConfirm);
     if(app->view_dispatcher) view_dispatcher_remove_view(app->view_dispatcher, ViewIdWriteResult);
+    if(app->view_dispatcher) view_dispatcher_remove_view(app->view_dispatcher, ViewIdSavedTagDetail);
     if(app->view_dispatcher) view_dispatcher_remove_view(app->view_dispatcher, ViewIdCloneSource);
     if(app->view_dispatcher) view_dispatcher_remove_view(app->view_dispatcher, ViewIdCloneTarget);
     if(app->view_dispatcher) view_dispatcher_remove_view(app->view_dispatcher, ViewIdCloneResult);
@@ -1786,10 +2198,12 @@ static void fm504_app_free(Fm504App* app) {
     if(app->config_menu) submenu_free(app->config_menu);
     if(app->scan_widget) widget_free(app->scan_widget);
     if(app->write_select_menu) submenu_free(app->write_select_menu);
+    if(app->saved_tags_menu) submenu_free(app->saved_tags_menu);
     if(app->write_input) text_input_free(app->write_input);
     if(app->access_input) text_input_free(app->access_input);
     if(app->write_confirm_widget) widget_free(app->write_confirm_widget);
     if(app->write_result_widget) widget_free(app->write_result_widget);
+    if(app->saved_tag_widget) widget_free(app->saved_tag_widget);
     if(app->clone_source_widget) widget_free(app->clone_source_widget);
     if(app->clone_target_widget) widget_free(app->clone_target_widget);
     if(app->clone_result_widget) widget_free(app->clone_result_widget);

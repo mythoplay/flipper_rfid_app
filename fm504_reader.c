@@ -100,6 +100,38 @@ bool fm504_reader_write_epc(Fm504Uart* uart, const char* epc_hex) {
     return fm504_reader_write_epc_ex(uart, epc_hex, NULL, 0);
 }
 
+bool fm504_reader_write_user_ex(
+    Fm504Uart* uart,
+    uint8_t addr_words,
+    const char* user_hex,
+    char* detail,
+    size_t detail_cap) {
+    if(!uart || !user_hex) return false;
+    if(detail && detail_cap > 0) detail[0] = '\0';
+
+    uint8_t cmd[128];
+    size_t cmd_len = 0;
+    if(!fm504_protocol_make_write_user_cmd(addr_words, user_hex, cmd, sizeof(cmd), &cmd_len)) return false;
+    if(!fm504_uart_send(uart, cmd, cmd_len)) return false;
+
+    uint8_t rx[96] = {0};
+    size_t rx_len = 0;
+    bool got = false;
+    for(size_t i = 0; i < 3; i++) {
+        if(fm504_uart_read(uart, rx, sizeof(rx), &rx_len, 220) && rx_len > 0) {
+            got = true;
+            break;
+        }
+    }
+    if(!got) {
+        fm504_reader_decode_write_result(NULL, 0, detail, detail_cap);
+        return false;
+    }
+
+    fm504_reader_decode_write_result(rx, rx_len, detail, detail_cap);
+    return fm504_protocol_response_is_ok(rx, rx_len);
+}
+
 bool fm504_reader_access_pwd(Fm504Uart* uart, const char* access_pwd_hex, char* detail, size_t detail_cap) {
     if(!uart || !access_pwd_hex) return false;
     if(detail && detail_cap > 0) detail[0] = '\0';

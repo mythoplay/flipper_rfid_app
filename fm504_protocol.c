@@ -142,6 +142,24 @@ bool fm504_protocol_make_write_epc_cmd(
     return true;
 }
 
+bool fm504_protocol_make_write_user_cmd(
+    uint8_t addr_words,
+    const char* user_hex,
+    uint8_t* out,
+    size_t out_cap,
+    size_t* out_len) {
+    if(!user_hex || !out || !out_len) return false;
+    if(!fm504_protocol_is_valid_epc(user_hex)) return false;
+
+    size_t hex_len = strlen(user_hex);
+    size_t len_words = hex_len / 4;
+    if(len_words == 0) return false;
+    int n = snprintf((char*)out, out_cap, "\nW3,%X,%X,%s\r", addr_words, (unsigned)len_words, user_hex);
+    if(n <= 0 || (size_t)n >= out_cap) return false;
+    *out_len = (size_t)n;
+    return true;
+}
+
 bool fm504_protocol_parse_inventory(const uint8_t* frame, size_t frame_len, Fm504InventoryResult* out) {
     return fm504_protocol_parse_epc_read(frame, frame_len, out);
 }
