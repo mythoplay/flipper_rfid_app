@@ -121,12 +121,8 @@ Validate these against your FM504 traces/manual:
 ## Build (ufbt)
 
 ```bash
-cd /Users/fernando/Source_Code/FlipperZero_RFID/flipper_rfid_app
+cd /Users/XXXXXXXX/FlipperZero_RFID/flipper_rfid_app
 ufbt build
 ufbt launch
 ```
 
-## Recommended Next Step
-
-Capture and share one real raw response frame from your FM504 for each operation (EPC read, TID read, write ACK).
-With that, protocol parsing and write reliability can be finalized safely.
