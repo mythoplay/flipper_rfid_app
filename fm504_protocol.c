@@ -92,6 +92,19 @@ bool fm504_protocol_make_read_epc_cmd(uint8_t words, uint8_t* out, size_t out_ca
     return true;
 }
 
+bool fm504_protocol_make_read_user_cmd(
+    uint8_t addr_words,
+    uint8_t words,
+    uint8_t* out,
+    size_t out_cap,
+    size_t* out_len) {
+    if(!out || !out_len) return false;
+    int n = snprintf((char*)out, out_cap, "\nR3,%X,%X\r", addr_words, words);
+    if(n <= 0 || (size_t)n >= out_cap) return false;
+    *out_len = (size_t)n;
+    return true;
+}
+
 bool fm504_protocol_make_set_tx_power_cmd(
     int8_t dbm,
     uint8_t* out,
@@ -191,6 +204,29 @@ bool fm504_protocol_parse_epc_read(const uint8_t* frame, size_t frame_len, Fm504
         return false;
     }
 
+    out->rssi = 0;
+    return true;
+}
+
+bool fm504_protocol_parse_user_read(const uint8_t* frame, size_t frame_len, Fm504InventoryResult* out) {
+    if(!frame || !out || frame_len == 0) return false;
+
+    char buff[128];
+    char hex[65];
+    if(frame_len >= sizeof(buff)) return false;
+
+    memcpy(buff, frame, frame_len);
+    buff[frame_len] = '\0';
+    size_t hex_len = extract_longest_hex_token(buff, frame_len, hex, sizeof(hex));
+    if(hex_len < 4 || (hex_len % 2 != 0)) return false;
+
+    strncpy(out->raw_hex, hex, sizeof(out->raw_hex) - 1);
+    out->raw_hex[sizeof(out->raw_hex) - 1] = '\0';
+
+    size_t copy_len = hex_len;
+    if(copy_len >= sizeof(out->epc_hex)) copy_len = sizeof(out->epc_hex) - 1;
+    memcpy(out->epc_hex, hex, copy_len);
+    out->epc_hex[copy_len] = '\0';
     out->rssi = 0;
     return true;
 }

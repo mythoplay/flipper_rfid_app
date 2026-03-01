@@ -47,6 +47,8 @@ bool fm504_reader_inventory_once(Fm504Uart* uart, Fm504ScanMode mode, Fm504Inven
     bool ok_cmd = false;
     if(mode == Fm504ScanModeTid) {
         ok_cmd = fm504_protocol_make_read_tid_cmd(0, 6, cmd, sizeof(cmd), &cmd_len);
+    } else if(mode == Fm504ScanModeUser) {
+        ok_cmd = fm504_protocol_make_read_user_cmd(0, 4, cmd, sizeof(cmd), &cmd_len);
     } else {
         ok_cmd = fm504_protocol_make_read_epc_cmd(8, cmd, sizeof(cmd), &cmd_len);
     }
@@ -60,6 +62,8 @@ bool fm504_reader_inventory_once(Fm504Uart* uart, Fm504ScanMode mode, Fm504Inven
 
     if(mode == Fm504ScanModeTid) {
         return fm504_protocol_parse_tid_read(rx, rx_len, out);
+    } else if(mode == Fm504ScanModeUser) {
+        return fm504_protocol_parse_user_read(rx, rx_len, out);
     } else {
         return fm504_protocol_parse_epc_read(rx, rx_len, out);
     }

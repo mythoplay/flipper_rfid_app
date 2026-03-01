@@ -21,6 +21,12 @@ bool fm504_protocol_make_read_tid_cmd(
     size_t out_cap,
     size_t* out_len);
 bool fm504_protocol_make_read_epc_cmd(uint8_t words, uint8_t* out, size_t out_cap, size_t* out_len);
+bool fm504_protocol_make_read_user_cmd(
+    uint8_t addr_words,
+    uint8_t words,
+    uint8_t* out,
+    size_t out_cap,
+    size_t* out_len);
 bool fm504_protocol_make_set_tx_power_cmd(
     int8_t dbm,
     uint8_t* out,
@@ -35,4 +41,5 @@ bool fm504_protocol_make_write_epc_cmd(
 bool fm504_protocol_parse_inventory(const uint8_t* frame, size_t frame_len, Fm504InventoryResult* out);
 bool fm504_protocol_parse_tid_read(const uint8_t* frame, size_t frame_len, Fm504InventoryResult* out);
 bool fm504_protocol_parse_epc_read(const uint8_t* frame, size_t frame_len, Fm504InventoryResult* out);
+bool fm504_protocol_parse_user_read(const uint8_t* frame, size_t frame_len, Fm504InventoryResult* out);
 bool fm504_protocol_response_is_ok(const uint8_t* frame, size_t frame_len);

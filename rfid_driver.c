@@ -61,7 +61,13 @@ static bool fm504_open_impl(void** out_impl, const RfidDriverConfig* cfg) {
         return false;
     }
 
-    impl->mode = (cfg->scan_mode == RfidScanModeTid) ? Fm504ScanModeTid : Fm504ScanModeEpc;
+    if(cfg->scan_mode == RfidScanModeTid) {
+        impl->mode = Fm504ScanModeTid;
+    } else if(cfg->scan_mode == RfidScanModeUser) {
+        impl->mode = Fm504ScanModeUser;
+    } else {
+        impl->mode = Fm504ScanModeEpc;
+    }
     impl->en_gpio = &gpio_ext_pa7;
     impl->enabled = false;
 
@@ -149,7 +155,13 @@ bool rfid_driver_set_mode(RfidDriver* driver, RfidScanMode mode) {
     switch(driver->module) {
     case RfidModuleFm504: {
         DriverFm504* impl = driver->impl;
-        impl->mode = (mode == RfidScanModeTid) ? Fm504ScanModeTid : Fm504ScanModeEpc;
+        if(mode == RfidScanModeTid) {
+            impl->mode = Fm504ScanModeTid;
+        } else if(mode == RfidScanModeUser) {
+            impl->mode = Fm504ScanModeUser;
+        } else {
+            impl->mode = Fm504ScanModeEpc;
+        }
         return true;
     }
     case RfidModuleRe40: {

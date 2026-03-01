@@ -9,6 +9,7 @@
 typedef enum {
     Fm504ScanModeEpc = 0,
     Fm504ScanModeTid,
+    Fm504ScanModeUser,
 } Fm504ScanMode;
 
 bool fm504_reader_inventory_once(Fm504Uart* uart, Fm504ScanMode mode, Fm504InventoryResult* out);

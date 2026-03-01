@@ -62,6 +62,8 @@ typedef enum {
 typedef enum {
     ModeActionEpc = 200,
     ModeActionTid,
+    ModeActionUser,
+    ModeActionAll,
 } ModeAction;
 
 typedef enum {
@@ -129,6 +131,7 @@ typedef struct {
     bool scan_running;
     RfidModuleType current_module;
     RfidScanMode scan_mode;
+    uint8_t scan_all_step;
     int8_t tx_power_db;
     uint16_t read_rate_ms;
 
@@ -160,6 +163,48 @@ typedef struct {
 
 static void fm504_app_free(Fm504App* app);
 static bool fm504_add_or_update_tag(Fm504App* app, const RfidTagRead* tag);
+
+static const char* fm504_scan_mode_name(RfidScanMode mode) {
+    switch(mode) {
+    case RfidScanModeTid:
+        return "TID";
+    case RfidScanModeUser:
+        return "USER";
+    case RfidScanModeAll:
+        return "ALL";
+    case RfidScanModeEpc:
+    default:
+        return "EPC";
+    }
+}
+
+static const char* fm504_scan_mode_all_step_name(uint8_t step) {
+    switch(step % 3) {
+    case 1:
+        return "TID";
+    case 2:
+        return "USER";
+    case 0:
+    default:
+        return "EPC";
+    }
+}
+
+static RfidScanMode fm504_effective_driver_mode(RfidScanMode mode, uint8_t all_step) {
+    if(mode == RfidScanModeTid) return RfidScanModeTid;
+    if(mode == RfidScanModeUser) return RfidScanModeUser;
+    if(mode == RfidScanModeAll) {
+        if((all_step % 3) == 1) return RfidScanModeTid;
+        if((all_step % 3) == 2) return RfidScanModeUser;
+        return RfidScanModeEpc;
+    }
+    return RfidScanModeEpc;
+}
+
+static void fm504_apply_scan_mode_to_driver(Fm504App* app) {
+    if(!app || !app->driver) return;
+    rfid_driver_set_mode(app->driver, fm504_effective_driver_mode(app->scan_mode, app->scan_all_step));
+}
 
 static void fm504_switch_view(Fm504App* app, ViewId view_id) {
     if(!app || app->closing || !app->view_dispatcher) return;
@@ -391,7 +436,10 @@ static bool fm504_clone_capture_source(Fm504App* app) {
 
     if(!rfid_driver_set_enabled(app->driver, true)) return false;
     RfidScanMode previous_mode = app->scan_mode;
-    if(previous_mode != RfidScanModeEpc) rfid_driver_set_mode(app->driver, RfidScanModeEpc);
+    uint8_t prev_all_step = app->scan_all_step;
+    app->scan_mode = RfidScanModeEpc;
+    app->scan_all_step = 0;
+    fm504_apply_scan_mode_to_driver(app);
 
     /* Warm up and retry reads to avoid missing the source tag in a single-shot call. */
     furi_delay_ms(120);
@@ -407,7 +455,9 @@ static bool fm504_clone_capture_source(Fm504App* app) {
         furi_delay_ms(60);
     }
 
-    if(previous_mode != RfidScanModeEpc) rfid_driver_set_mode(app->driver, previous_mode);
+    app->scan_mode = previous_mode;
+    app->scan_all_step = prev_all_step;
+    fm504_apply_scan_mode_to_driver(app);
     rfid_driver_set_enabled(app->driver, false);
     if(!ok) return false;
 
@@ -422,10 +472,15 @@ static bool fm504_capture_single_epc(Fm504App* app, char* out_epc, size_t out_ca
     if(!app || !app->driver || !out_epc || out_cap < 2) return false;
 
     RfidScanMode prev_mode = app->scan_mode;
-    if(prev_mode != RfidScanModeEpc) rfid_driver_set_mode(app->driver, RfidScanModeEpc);
+    uint8_t prev_all_step = app->scan_all_step;
+    app->scan_mode = RfidScanModeEpc;
+    app->scan_all_step = 0;
+    fm504_apply_scan_mode_to_driver(app);
 
     if(!rfid_driver_set_enabled(app->driver, true)) {
-        if(prev_mode != RfidScanModeEpc) rfid_driver_set_mode(app->driver, prev_mode);
+        app->scan_mode = prev_mode;
+        app->scan_all_step = prev_all_step;
+        fm504_apply_scan_mode_to_driver(app);
         return false;
     }
 
@@ -447,7 +502,9 @@ static bool fm504_capture_single_epc(Fm504App* app, char* out_epc, size_t out_ca
     }
 
     rfid_driver_set_enabled(app->driver, false);
-    if(prev_mode != RfidScanModeEpc) rfid_driver_set_mode(app->driver, prev_mode);
+    app->scan_mode = prev_mode;
+    app->scan_all_step = prev_all_step;
+    fm504_apply_scan_mode_to_driver(app);
     return ok;
 }
 
@@ -628,7 +685,7 @@ static void fm504_refresh_scan_view(Fm504App* app) {
         app->scan_mode_line,
         sizeof(app->scan_mode_line),
         "Scan > %s %ddB %ums",
-        (app->scan_mode == RfidScanModeTid) ? "TID" : "EPC",
+        fm504_scan_mode_name(app->scan_mode),
         app->tx_power_db,
         app->read_rate_ms);
     snprintf(qty_line, sizeof(qty_line), "Qty: %u", (unsigned)app->tags_count);
@@ -785,7 +842,13 @@ static void fm504_build_read_mode_menu(Fm504App* app) {
     submenu_set_header(app->read_mode_menu, "Read Mode");
     submenu_add_item(app->read_mode_menu, "EPC", ModeActionEpc, fm504_submenu_event, app);
     submenu_add_item(app->read_mode_menu, "TID", ModeActionTid, fm504_submenu_event, app);
-    submenu_set_selected_item(app->read_mode_menu, (app->scan_mode == RfidScanModeTid) ? ModeActionTid : ModeActionEpc);
+    submenu_add_item(app->read_mode_menu, "USER", ModeActionUser, fm504_submenu_event, app);
+    submenu_add_item(app->read_mode_menu, "ALL", ModeActionAll, fm504_submenu_event, app);
+    uint32_t selected = ModeActionEpc;
+    if(app->scan_mode == RfidScanModeTid) selected = ModeActionTid;
+    else if(app->scan_mode == RfidScanModeUser) selected = ModeActionUser;
+    else if(app->scan_mode == RfidScanModeAll) selected = ModeActionAll;
+    submenu_set_selected_item(app->read_mode_menu, selected);
 }
 
 static void fm504_build_module_menu(Fm504App* app) {
@@ -996,15 +1059,33 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
 
     case ModeActionEpc:
         app->scan_mode = RfidScanModeEpc;
-        rfid_driver_set_mode(app->driver, app->scan_mode);
+        app->scan_all_step = 0;
+        fm504_apply_scan_mode_to_driver(app);
         snprintf(app->status_msg, sizeof(app->status_msg), "Read mode: EPC");
         fm504_switch_view(app, ViewIdMainMenu);
         return true;
 
     case ModeActionTid:
         app->scan_mode = RfidScanModeTid;
-        rfid_driver_set_mode(app->driver, app->scan_mode);
+        app->scan_all_step = 0;
+        fm504_apply_scan_mode_to_driver(app);
         snprintf(app->status_msg, sizeof(app->status_msg), "Read mode: TID");
+        fm504_switch_view(app, ViewIdMainMenu);
+        return true;
+
+    case ModeActionUser:
+        app->scan_mode = RfidScanModeUser;
+        app->scan_all_step = 0;
+        fm504_apply_scan_mode_to_driver(app);
+        snprintf(app->status_msg, sizeof(app->status_msg), "Read mode: USER");
+        fm504_switch_view(app, ViewIdMainMenu);
+        return true;
+
+    case ModeActionAll:
+        app->scan_mode = RfidScanModeAll;
+        app->scan_all_step = 0;
+        fm504_apply_scan_mode_to_driver(app);
+        snprintf(app->status_msg, sizeof(app->status_msg), "Read mode: ALL");
         fm504_switch_view(app, ViewIdMainMenu);
         return true;
 
@@ -1067,6 +1148,8 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
         if(app->scan_running) {
             bool probe_ok = true;
             snprintf(app->scan_last_line, sizeof(app->scan_last_line), "No reads");
+            app->scan_all_step = 0;
+            fm504_apply_scan_mode_to_driver(app);
             if(!rfid_driver_set_enabled(app->driver, true)) {
                 app->scan_running = false;
                 snprintf(app->status_msg, sizeof(app->status_msg), "Error EN=HIGH");
@@ -1208,13 +1291,23 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
 
     case EventScanTick:
         if(app->scan_running) {
+            if(app->scan_mode == RfidScanModeAll || app->scan_mode == RfidScanModeUser) {
+                fm504_apply_scan_mode_to_driver(app);
+            }
             RfidTagRead tag = {0};
             if(rfid_driver_scan_once(app->driver, &tag)) {
                 bool is_new = fm504_add_or_update_tag(app, &tag);
                 if(is_new) fm504_vibro_read(app);
-                snprintf(app->status_msg, sizeof(app->status_msg), "%s: %s", (app->scan_mode == RfidScanModeTid) ? "TID" : "EPC", tag.primary_hex);
+                const char* read_label =
+                    (app->scan_mode == RfidScanModeAll)
+                        ? fm504_scan_mode_all_step_name(app->scan_all_step)
+                        : fm504_scan_mode_name(app->scan_mode);
+                snprintf(app->status_msg, sizeof(app->status_msg), "%s: %s", read_label, tag.primary_hex);
                 snprintf(app->scan_last_line, sizeof(app->scan_last_line), "%s", tag.primary_hex);
                 if(app->current_view == ViewIdScan) fm504_refresh_scan_view(app);
+            }
+            if(app->scan_mode == RfidScanModeAll) {
+                app->scan_all_step = (uint8_t)((app->scan_all_step + 1U) % 3U);
             }
         }
         return true;

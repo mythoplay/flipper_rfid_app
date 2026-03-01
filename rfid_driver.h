@@ -12,6 +12,8 @@ typedef enum {
 typedef enum {
     RfidScanModeEpc = 0,
     RfidScanModeTid,
+    RfidScanModeUser,
+    RfidScanModeAll,
 } RfidScanMode;
 
 typedef struct {
