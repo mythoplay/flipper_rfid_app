@@ -1,7 +1,7 @@
 #pragma once
 
-#include "fm504_protocol.h"
-#include "fm504_uart.h"
+#include "uhf_protocol.h"
+#include "uhf_uart.h"
 
 #include <stddef.h>
 #include <stdbool.h>

@@ -1,7 +1,7 @@
 #include "rfid_driver.h"
 
-#include "fm504_reader.h"
-#include "fm504_uart.h"
+#include "uhf_reader.h"
+#include "uhf_uart.h"
 
 #include <furi.h>
 #include <furi_hal_gpio.h>

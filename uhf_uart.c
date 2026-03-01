@@ -1,4 +1,4 @@
-#include "fm504_uart.h"
+#include "uhf_uart.h"
 
 #include <furi.h>
 #include <furi_hal_serial.h>

@@ -16,7 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define TAG "FM504_APP"
+#define TAG "FLIPPER_RFID"
 #define MAX_TAGS 64
 #define MAX_SCAN_LINES 4
 
@@ -2222,7 +2222,7 @@ static void fm504_app_free(Fm504App* app) {
     free(app);
 }
 
-int32_t fm504_rfid_app(void* p) {
+int32_t flipper_rfid_app(void* p) {
     UNUSED(p);
 
     Fm504App* app = fm504_app_alloc();

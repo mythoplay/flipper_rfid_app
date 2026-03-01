@@ -10,13 +10,13 @@ App externa para Flipper Zero con:
 ## Estructura
 
 - `application.fam`: metadata de la app
-- `fm504_rfid_app.c`: UI y flujo principal (usa interfaz de driver)
+- `flipper_rfid_app.c`: UI y flujo principal de FlippeRFID (usa interfaz de driver modular)
 - `rfid_driver.*`: interfaz comun para modulos RFID (escalable)
 - `RfidModuleFm504`: modulo funcional actual
 - `RfidModuleRe40` (Zebra): base integrada, comandos aun no implementados
-- `fm504_uart.*`: transporte UART (stub)
-- `fm504_protocol.*`: validacion/parsing/comandos (placeholder)
-- `fm504_reader.*`: implementacion FM504 (inventory/write)
+- `uhf_uart.*`: transporte UART para lectores UHF por serial
+- `uhf_protocol.*`: validacion/parsing/comandos EPC Gen2 (familia FM504)
+- `uhf_reader.*`: implementacion de lectura/escritura sobre protocolo UHF
 - `storage_tags.*`: persistencia en `/ext/apps_data/fm504_rfid/tags.txt`
 
 ## Arquitectura escalable
@@ -54,7 +54,7 @@ Con el proyecto Python validado (`FM-503-UHF-RFID-Reader-main`) se ajusto la app
 Actualmente en la app:
 
 - `FM503`/`FM504`/`FM505` suelen compartir familia de comandos, pero valida en tu firmware real.
-- `fm504_uart.c` sigue como stub para no bloquear compilacion/flujo UI.
+- `uhf_uart.c` implementa UART real y cola RX para comandos/response.
 - menu principal:
   - `Scan`
   - `Write Tag`
@@ -73,7 +73,7 @@ Actualmente en la app:
 
 Debes completar estas funciones según el manual del FM-504:
 
-1. `fm504_uart_open`, `fm504_uart_send`, `fm504_uart_read`
+1. validar `fm504_uart_open`, `fm504_uart_send`, `fm504_uart_read` con tu cableado real
 2. validar `fm504_protocol_make_write_epc_cmd` contra traza real del FM504
 3. si usas `U` multi-tag, agregar parser de lista por lineas
 

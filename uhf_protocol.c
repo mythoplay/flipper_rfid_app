@@ -1,4 +1,4 @@
-#include "fm504_protocol.h"
+#include "uhf_protocol.h"
 
 #include <ctype.h>
 #include <stdio.h>
