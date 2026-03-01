@@ -60,6 +60,10 @@ typedef enum {
 
 typedef enum {
     ModuleActionFm504 = 150,
+    ModuleActionFm505,
+    ModuleActionFm507,
+    ModuleActionFm509,
+    ModuleActionFm505A,
     ModuleActionRe40,
 } ModuleAction;
 
@@ -211,6 +215,24 @@ static const char* flipper_rfid_scan_mode_name(RfidScanMode mode) {
     case RfidScanModeEpc:
     default:
         return "EPC";
+    }
+}
+
+static const char* flipper_rfid_module_name(RfidModuleType module) {
+    switch(module) {
+    case RfidModuleFm504:
+        return "Fonkan FM504";
+    case RfidModuleFm505:
+        return "Fonkan FM505";
+    case RfidModuleFm507:
+        return "Fonkan FM507";
+    case RfidModuleFm509:
+        return "Fonkan FM509";
+    case RfidModuleFm505A:
+        return "Fonkan FM505A";
+    case RfidModuleRe40:
+    default:
+        return "Zebra RE40";
     }
 }
 
@@ -1202,10 +1224,36 @@ static void flipper_rfid_build_read_mode_menu(FlipperRfidApp* app) {
 static void flipper_rfid_build_module_menu(FlipperRfidApp* app) {
     submenu_reset(app->module_menu);
     submenu_set_header(app->module_menu, "Module");
-    submenu_add_item(app->module_menu, "FM504", ModuleActionFm504, flipper_rfid_submenu_event, app);
+    submenu_add_item(app->module_menu, "Fonkan FM504 (1dB)", ModuleActionFm504, flipper_rfid_submenu_event, app);
+    submenu_add_item(app->module_menu, "Fonkan FM505 (3dB)", ModuleActionFm505, flipper_rfid_submenu_event, app);
+    submenu_add_item(app->module_menu, "Fonkan FM507 (4dB)", ModuleActionFm507, flipper_rfid_submenu_event, app);
+    submenu_add_item(app->module_menu, "Fonkan FM509 (5dB)", ModuleActionFm509, flipper_rfid_submenu_event, app);
+    submenu_add_item(app->module_menu, "Fonkan FM505A (5.5dB)", ModuleActionFm505A, flipper_rfid_submenu_event, app);
     submenu_add_item(app->module_menu, "RE40 (Zebra)", ModuleActionRe40, flipper_rfid_submenu_event, app);
-    submenu_set_selected_item(
-        app->module_menu, (app->current_module == RfidModuleRe40) ? ModuleActionRe40 : ModuleActionFm504);
+
+    uint32_t selected = ModuleActionFm504;
+    switch(app->current_module) {
+    case RfidModuleFm505:
+        selected = ModuleActionFm505;
+        break;
+    case RfidModuleFm507:
+        selected = ModuleActionFm507;
+        break;
+    case RfidModuleFm509:
+        selected = ModuleActionFm509;
+        break;
+    case RfidModuleFm505A:
+        selected = ModuleActionFm505A;
+        break;
+    case RfidModuleRe40:
+        selected = ModuleActionRe40;
+        break;
+    case RfidModuleFm504:
+    default:
+        selected = ModuleActionFm504;
+        break;
+    }
+    submenu_set_selected_item(app->module_menu, selected);
 }
 
 static void flipper_rfid_build_tx_power_menu(FlipperRfidApp* app) {
@@ -1213,7 +1261,7 @@ static void flipper_rfid_build_tx_power_menu(FlipperRfidApp* app) {
     submenu_set_header(app->tx_power_menu, "TX Power (dB)");
 
     char label[16];
-    for(int db = -2; db <= 25; db++) {
+    for(int db = -2; db <= 27; db++) {
         snprintf(label, sizeof(label), "%ddB", db);
         submenu_add_item(
             app->tx_power_menu,
@@ -1276,6 +1324,8 @@ static bool flipper_rfid_custom_event_callback(void* context, uint32_t event) {
 
     if(event >= EventTxPowerBase && event < EventTxPowerBase + 64) {
         int8_t db = (int8_t)(event - EventTxPowerBase) - 2;
+        if(db > 27) db = 27;
+        if(db < -2) db = -2;
         app->tx_power_db = db;
         if(rfid_driver_set_tx_power(app->driver, db)) {
             snprintf(app->status_msg, sizeof(app->status_msg), "Power set: %ddB", db);
@@ -1411,24 +1461,51 @@ static bool flipper_rfid_custom_event_callback(void* context, uint32_t event) {
         return true;
 
     case ModuleActionFm504:
-        if(flipper_rfid_reopen_driver(app, RfidModuleFm504)) {
-            snprintf(app->status_msg, sizeof(app->status_msg), "Module: FM504");
-            flipper_rfid_persist_settings(app);
-        } else {
-            snprintf(app->status_msg, sizeof(app->status_msg), "Error opening FM504");
+    case ModuleActionFm505:
+    case ModuleActionFm507:
+    case ModuleActionFm509:
+    case ModuleActionFm505A:
+    case ModuleActionRe40: {
+        RfidModuleType selected = RfidModuleFm504;
+        switch(event) {
+        case ModuleActionFm505:
+            selected = RfidModuleFm505;
+            break;
+        case ModuleActionFm507:
+            selected = RfidModuleFm507;
+            break;
+        case ModuleActionFm509:
+            selected = RfidModuleFm509;
+            break;
+        case ModuleActionFm505A:
+            selected = RfidModuleFm505A;
+            break;
+        case ModuleActionRe40:
+            selected = RfidModuleRe40;
+            break;
+        case ModuleActionFm504:
+        default:
+            selected = RfidModuleFm504;
+            break;
         }
-        flipper_rfid_switch_view(app, ViewIdMainMenu);
-        return true;
 
-    case ModuleActionRe40:
-        if(flipper_rfid_reopen_driver(app, RfidModuleRe40)) {
-            snprintf(app->status_msg, sizeof(app->status_msg), "Module: RE40 (base)");
+        if(flipper_rfid_reopen_driver(app, selected)) {
+            snprintf(
+                app->status_msg,
+                sizeof(app->status_msg),
+                "%s selected",
+                flipper_rfid_module_name(selected));
             flipper_rfid_persist_settings(app);
         } else {
-            snprintf(app->status_msg, sizeof(app->status_msg), "Error opening RE40");
+            snprintf(
+                app->status_msg,
+                sizeof(app->status_msg),
+                "Error opening %s",
+                flipper_rfid_module_name(selected));
         }
         flipper_rfid_switch_view(app, ViewIdMainMenu);
         return true;
+    }
 
     case MainActionReadMode:
         flipper_rfid_build_read_mode_menu(app);
@@ -2054,6 +2131,8 @@ static FlipperRfidApp* flipper_rfid_app_alloc(void) {
         strncpy(app->access_password, settings.access_password, sizeof(app->access_password) - 1);
         app->access_password[sizeof(app->access_password) - 1] = '\0';
     }
+    if(app->tx_power_db < -2) app->tx_power_db = -2;
+    if(app->tx_power_db > 27) app->tx_power_db = 27;
 
     RfidDriverConfig driver_cfg = {
         .module = app->current_module,

@@ -316,7 +316,7 @@ bool storage_settings_load(RfidAppSettings* settings) {
                     if(v >= (long)RfidScanModeEpc && v <= (long)RfidScanModeAll) settings->scan_mode = (RfidScanMode)v;
                 } else if(strcmp(key, "tx_power_db") == 0) {
                     long v = strtol(val, NULL, 10);
-                    if(v >= -2 && v <= 25) settings->tx_power_db = (int8_t)v;
+                    if(v >= -2 && v <= 27) settings->tx_power_db = (int8_t)v;
                 } else if(strcmp(key, "read_rate_ms") == 0) {
                     long v = strtol(val, NULL, 10);
                     if(v >= 10 && v <= 2000) settings->read_rate_ms = (uint16_t)v;

@@ -6,6 +6,10 @@
 
 typedef enum {
     RfidModuleFm504 = 0,
+    RfidModuleFm505,
+    RfidModuleFm507,
+    RfidModuleFm509,
+    RfidModuleFm505A,
     RfidModuleRe40,
 } RfidModuleType;
 

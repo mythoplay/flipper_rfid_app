@@ -113,6 +113,10 @@ bool rfid_driver_open(RfidDriver** out_driver, const RfidDriverConfig* cfg) {
     bool ok = false;
     switch(cfg->module) {
     case RfidModuleFm504:
+    case RfidModuleFm505:
+    case RfidModuleFm507:
+    case RfidModuleFm509:
+    case RfidModuleFm505A:
         ok = driver_fm504_open_impl(&driver->impl, cfg);
         break;
     case RfidModuleRe40:
@@ -137,6 +141,10 @@ void rfid_driver_close(RfidDriver* driver) {
 
     switch(driver->module) {
     case RfidModuleFm504:
+    case RfidModuleFm505:
+    case RfidModuleFm507:
+    case RfidModuleFm509:
+    case RfidModuleFm505A:
         driver_fm504_close_impl(driver->impl);
         break;
     case RfidModuleRe40:
@@ -153,7 +161,11 @@ bool rfid_driver_set_mode(RfidDriver* driver, RfidScanMode mode) {
     if(!driver || !driver->impl) return false;
 
     switch(driver->module) {
-    case RfidModuleFm504: {
+    case RfidModuleFm504:
+    case RfidModuleFm505:
+    case RfidModuleFm507:
+    case RfidModuleFm509:
+    case RfidModuleFm505A: {
         DriverFm504* impl = driver->impl;
         if(mode == RfidScanModeTid) {
             impl->mode = UhfScanModeTid;
@@ -178,7 +190,11 @@ bool rfid_driver_set_tx_power(RfidDriver* driver, int8_t dbm) {
     if(!driver || !driver->impl) return false;
 
     switch(driver->module) {
-    case RfidModuleFm504: {
+    case RfidModuleFm504:
+    case RfidModuleFm505:
+    case RfidModuleFm507:
+    case RfidModuleFm509:
+    case RfidModuleFm505A: {
         DriverFm504* impl = driver->impl;
         return uhf_reader_set_tx_power(impl->uart, dbm);
     }
@@ -193,7 +209,11 @@ bool rfid_driver_set_enabled(RfidDriver* driver, bool enabled) {
     if(!driver || !driver->impl) return false;
 
     switch(driver->module) {
-    case RfidModuleFm504: {
+    case RfidModuleFm504:
+    case RfidModuleFm505:
+    case RfidModuleFm507:
+    case RfidModuleFm509:
+    case RfidModuleFm505A: {
         DriverFm504* impl = driver->impl;
         furi_hal_gpio_write(impl->en_gpio, enabled);
         impl->enabled = enabled;
@@ -211,7 +231,11 @@ bool rfid_driver_probe(RfidDriver* driver, int8_t tx_power_dbm) {
     if(!driver || !driver->impl) return false;
 
     switch(driver->module) {
-    case RfidModuleFm504: {
+    case RfidModuleFm504:
+    case RfidModuleFm505:
+    case RfidModuleFm507:
+    case RfidModuleFm509:
+    case RfidModuleFm505A: {
         DriverFm504* impl = driver->impl;
         bool was_enabled = impl->enabled;
 
@@ -244,7 +268,11 @@ bool rfid_driver_scan_once(RfidDriver* driver, RfidTagRead* out) {
     if(!driver || !driver->impl || !out) return false;
 
     switch(driver->module) {
-    case RfidModuleFm504: {
+    case RfidModuleFm504:
+    case RfidModuleFm505:
+    case RfidModuleFm507:
+    case RfidModuleFm509:
+    case RfidModuleFm505A: {
         DriverFm504* impl = driver->impl;
         if(!impl->enabled) return false;
         UhfInventoryResult tmp = {0};
@@ -273,7 +301,11 @@ bool rfid_driver_write_epc_ex(
     if(detail && detail_cap > 0) detail[0] = '\0';
 
     switch(driver->module) {
-    case RfidModuleFm504: {
+    case RfidModuleFm504:
+    case RfidModuleFm505:
+    case RfidModuleFm507:
+    case RfidModuleFm509:
+    case RfidModuleFm505A: {
         DriverFm504* impl = driver->impl;
         bool was_enabled = impl->enabled;
         if(!was_enabled) {
@@ -306,7 +338,11 @@ bool rfid_driver_write_user_ex(
     if(detail && detail_cap > 0) detail[0] = '\0';
 
     switch(driver->module) {
-    case RfidModuleFm504: {
+    case RfidModuleFm504:
+    case RfidModuleFm505:
+    case RfidModuleFm507:
+    case RfidModuleFm509:
+    case RfidModuleFm505A: {
         DriverFm504* impl = driver->impl;
         bool was_enabled = impl->enabled;
         if(!was_enabled) {
@@ -333,7 +369,11 @@ bool rfid_driver_access_pwd(
     if(detail && detail_cap > 0) detail[0] = '\0';
 
     switch(driver->module) {
-    case RfidModuleFm504: {
+    case RfidModuleFm504:
+    case RfidModuleFm505:
+    case RfidModuleFm507:
+    case RfidModuleFm509:
+    case RfidModuleFm505A: {
         DriverFm504* impl = driver->impl;
         bool was_enabled = impl->enabled;
         if(!was_enabled) {
