@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
-static void fm504_reader_decode_write_result(const uint8_t* rx, size_t rx_len, char* detail, size_t detail_cap) {
+static void uhf_reader_decode_write_result(const uint8_t* rx, size_t rx_len, char* detail, size_t detail_cap) {
     if(!detail || detail_cap == 0) return;
     detail[0] = '\0';
 
@@ -39,69 +39,69 @@ static void fm504_reader_decode_write_result(const uint8_t* rx, size_t rx_len, c
     else snprintf(detail, detail_cap, "Raw: %s", payload);
 }
 
-bool fm504_reader_inventory_once(Fm504Uart* uart, Fm504ScanMode mode, Fm504InventoryResult* out) {
+bool uhf_reader_inventory_once(UhfUart* uart, UhfScanMode mode, UhfInventoryResult* out) {
     if(!uart || !out) return false;
 
     uint8_t cmd[32];
     size_t cmd_len = 0;
     bool ok_cmd = false;
-    if(mode == Fm504ScanModeTid) {
-        ok_cmd = fm504_protocol_make_read_tid_cmd(0, 6, cmd, sizeof(cmd), &cmd_len);
-    } else if(mode == Fm504ScanModeUser) {
-        ok_cmd = fm504_protocol_make_read_user_cmd(0, 4, cmd, sizeof(cmd), &cmd_len);
+    if(mode == UhfScanModeTid) {
+        ok_cmd = uhf_protocol_make_read_tid_cmd(0, 6, cmd, sizeof(cmd), &cmd_len);
+    } else if(mode == UhfScanModeUser) {
+        ok_cmd = uhf_protocol_make_read_user_cmd(0, 4, cmd, sizeof(cmd), &cmd_len);
     } else {
-        ok_cmd = fm504_protocol_make_read_epc_cmd(8, cmd, sizeof(cmd), &cmd_len);
+        ok_cmd = uhf_protocol_make_read_epc_cmd(8, cmd, sizeof(cmd), &cmd_len);
     }
     if(!ok_cmd) return false;
-    if(!fm504_uart_send(uart, cmd, cmd_len)) return false;
+    if(!uhf_uart_send(uart, cmd, cmd_len)) return false;
 
     uint8_t rx[128];
     size_t rx_len = 0;
-    if(!fm504_uart_read(uart, rx, sizeof(rx), &rx_len, 100)) return false;
+    if(!uhf_uart_read(uart, rx, sizeof(rx), &rx_len, 100)) return false;
     if(rx_len == 0) return false;
 
-    if(mode == Fm504ScanModeTid) {
-        return fm504_protocol_parse_tid_read(rx, rx_len, out);
-    } else if(mode == Fm504ScanModeUser) {
-        return fm504_protocol_parse_user_read(rx, rx_len, out);
+    if(mode == UhfScanModeTid) {
+        return uhf_protocol_parse_tid_read(rx, rx_len, out);
+    } else if(mode == UhfScanModeUser) {
+        return uhf_protocol_parse_user_read(rx, rx_len, out);
     } else {
-        return fm504_protocol_parse_epc_read(rx, rx_len, out);
+        return uhf_protocol_parse_epc_read(rx, rx_len, out);
     }
 }
 
-bool fm504_reader_write_epc_ex(Fm504Uart* uart, const char* epc_hex, char* detail, size_t detail_cap) {
+bool uhf_reader_write_epc_ex(UhfUart* uart, const char* epc_hex, char* detail, size_t detail_cap) {
     if(!uart || !epc_hex) return false;
     if(detail && detail_cap > 0) detail[0] = '\0';
 
     uint8_t cmd[96];
     size_t cmd_len = 0;
-    if(!fm504_protocol_make_write_epc_cmd(epc_hex, cmd, sizeof(cmd), &cmd_len)) return false;
-    if(!fm504_uart_send(uart, cmd, cmd_len)) return false;
+    if(!uhf_protocol_make_write_epc_cmd(epc_hex, cmd, sizeof(cmd), &cmd_len)) return false;
+    if(!uhf_uart_send(uart, cmd, cmd_len)) return false;
 
     uint8_t rx[96] = {0};
     size_t rx_len = 0;
     bool got = false;
     for(size_t i = 0; i < 3; i++) {
-        if(fm504_uart_read(uart, rx, sizeof(rx), &rx_len, 220) && rx_len > 0) {
+        if(uhf_uart_read(uart, rx, sizeof(rx), &rx_len, 220) && rx_len > 0) {
             got = true;
             break;
         }
     }
     if(!got) {
-        fm504_reader_decode_write_result(NULL, 0, detail, detail_cap);
+        uhf_reader_decode_write_result(NULL, 0, detail, detail_cap);
         return false;
     }
 
-    fm504_reader_decode_write_result(rx, rx_len, detail, detail_cap);
-    return fm504_protocol_response_is_ok(rx, rx_len);
+    uhf_reader_decode_write_result(rx, rx_len, detail, detail_cap);
+    return uhf_protocol_response_is_ok(rx, rx_len);
 }
 
-bool fm504_reader_write_epc(Fm504Uart* uart, const char* epc_hex) {
-    return fm504_reader_write_epc_ex(uart, epc_hex, NULL, 0);
+bool uhf_reader_write_epc(UhfUart* uart, const char* epc_hex) {
+    return uhf_reader_write_epc_ex(uart, epc_hex, NULL, 0);
 }
 
-bool fm504_reader_write_user_ex(
-    Fm504Uart* uart,
+bool uhf_reader_write_user_ex(
+    UhfUart* uart,
     uint8_t addr_words,
     const char* user_hex,
     char* detail,
@@ -111,28 +111,28 @@ bool fm504_reader_write_user_ex(
 
     uint8_t cmd[128];
     size_t cmd_len = 0;
-    if(!fm504_protocol_make_write_user_cmd(addr_words, user_hex, cmd, sizeof(cmd), &cmd_len)) return false;
-    if(!fm504_uart_send(uart, cmd, cmd_len)) return false;
+    if(!uhf_protocol_make_write_user_cmd(addr_words, user_hex, cmd, sizeof(cmd), &cmd_len)) return false;
+    if(!uhf_uart_send(uart, cmd, cmd_len)) return false;
 
     uint8_t rx[96] = {0};
     size_t rx_len = 0;
     bool got = false;
     for(size_t i = 0; i < 3; i++) {
-        if(fm504_uart_read(uart, rx, sizeof(rx), &rx_len, 220) && rx_len > 0) {
+        if(uhf_uart_read(uart, rx, sizeof(rx), &rx_len, 220) && rx_len > 0) {
             got = true;
             break;
         }
     }
     if(!got) {
-        fm504_reader_decode_write_result(NULL, 0, detail, detail_cap);
+        uhf_reader_decode_write_result(NULL, 0, detail, detail_cap);
         return false;
     }
 
-    fm504_reader_decode_write_result(rx, rx_len, detail, detail_cap);
-    return fm504_protocol_response_is_ok(rx, rx_len);
+    uhf_reader_decode_write_result(rx, rx_len, detail, detail_cap);
+    return uhf_protocol_response_is_ok(rx, rx_len);
 }
 
-bool fm504_reader_access_pwd(Fm504Uart* uart, const char* access_pwd_hex, char* detail, size_t detail_cap) {
+bool uhf_reader_access_pwd(UhfUart* uart, const char* access_pwd_hex, char* detail, size_t detail_cap) {
     if(!uart || !access_pwd_hex) return false;
     if(detail && detail_cap > 0) detail[0] = '\0';
 
@@ -145,13 +145,13 @@ bool fm504_reader_access_pwd(Fm504Uart* uart, const char* access_pwd_hex, char* 
     uint8_t cmd[32];
     int cmd_len = snprintf((char*)cmd, sizeof(cmd), "\nP%s\r", access_pwd_hex);
     if(cmd_len <= 0 || (size_t)cmd_len >= sizeof(cmd)) return false;
-    if(!fm504_uart_send(uart, cmd, (size_t)cmd_len)) return false;
+    if(!uhf_uart_send(uart, cmd, (size_t)cmd_len)) return false;
 
     uint8_t rx[96] = {0};
     size_t rx_len = 0;
     bool got = false;
     for(size_t i = 0; i < 3; i++) {
-        if(fm504_uart_read(uart, rx, sizeof(rx), &rx_len, 220) && rx_len > 0) {
+        if(uhf_uart_read(uart, rx, sizeof(rx), &rx_len, 220) && rx_len > 0) {
             got = true;
             break;
         }
@@ -161,7 +161,7 @@ bool fm504_reader_access_pwd(Fm504Uart* uart, const char* access_pwd_hex, char* 
         return false;
     }
 
-    if(fm504_protocol_response_is_ok(rx, rx_len)) {
+    if(uhf_protocol_response_is_ok(rx, rx_len)) {
         if(detail && detail_cap > 0) snprintf(detail, detail_cap, "Access OK");
         return true;
     }
@@ -176,18 +176,18 @@ bool fm504_reader_access_pwd(Fm504Uart* uart, const char* access_pwd_hex, char* 
     return false;
 }
 
-bool fm504_reader_set_tx_power(Fm504Uart* uart, int8_t dbm) {
+bool uhf_reader_set_tx_power(UhfUart* uart, int8_t dbm) {
     if(!uart) return false;
 
     uint8_t cmd[32];
     size_t cmd_len = 0;
-    if(!fm504_protocol_make_set_tx_power_cmd(dbm, cmd, sizeof(cmd), &cmd_len)) return false;
-    if(!fm504_uart_send(uart, cmd, cmd_len)) return false;
+    if(!uhf_protocol_make_set_tx_power_cmd(dbm, cmd, sizeof(cmd), &cmd_len)) return false;
+    if(!uhf_uart_send(uart, cmd, cmd_len)) return false;
 
     uint8_t rx[96];
     size_t rx_len = 0;
-    if(!fm504_uart_read(uart, rx, sizeof(rx), &rx_len, 120)) return false;
+    if(!uhf_uart_read(uart, rx, sizeof(rx), &rx_len, 120)) return false;
     if(rx_len == 0) return false;
 
-    return fm504_protocol_response_is_ok(rx, rx_len);
+    return uhf_protocol_response_is_ok(rx, rx_len);
 }

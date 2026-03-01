@@ -32,7 +32,7 @@ static size_t extract_longest_hex_token(const char* in, size_t in_len, char* out
     return best_len;
 }
 
-bool fm504_protocol_normalize_epc(const char* in, char* out, size_t out_cap) {
+bool uhf_protocol_normalize_epc(const char* in, char* out, size_t out_cap) {
     if(!in || !out || out_cap < 2) return false;
 
     size_t j = 0;
@@ -49,7 +49,7 @@ bool fm504_protocol_normalize_epc(const char* in, char* out, size_t out_cap) {
     return j > 0 && (j % 2 == 0);
 }
 
-bool fm504_protocol_is_valid_epc(const char* epc_hex) {
+bool uhf_protocol_is_valid_epc(const char* epc_hex) {
     if(!epc_hex) return false;
     size_t len = strlen(epc_hex);
     if(len == 0 || len > 32 || (len % 2 != 0)) return false;
@@ -59,7 +59,7 @@ bool fm504_protocol_is_valid_epc(const char* epc_hex) {
     return true;
 }
 
-bool fm504_protocol_make_inventory_cmd(uint8_t* out, size_t out_cap, size_t* out_len) {
+bool uhf_protocol_make_inventory_cmd(uint8_t* out, size_t out_cap, size_t* out_len) {
     if(!out || !out_len || out_cap < 3) return false;
 
     /* FM505 manual:
@@ -71,7 +71,7 @@ bool fm504_protocol_make_inventory_cmd(uint8_t* out, size_t out_cap, size_t* out
     return true;
 }
 
-bool fm504_protocol_make_read_tid_cmd(
+bool uhf_protocol_make_read_tid_cmd(
     uint8_t addr_words,
     uint8_t words,
     uint8_t* out,
@@ -84,7 +84,7 @@ bool fm504_protocol_make_read_tid_cmd(
     return true;
 }
 
-bool fm504_protocol_make_read_epc_cmd(uint8_t words, uint8_t* out, size_t out_cap, size_t* out_len) {
+bool uhf_protocol_make_read_epc_cmd(uint8_t words, uint8_t* out, size_t out_cap, size_t* out_len) {
     if(!out || !out_len) return false;
     int n = snprintf((char*)out, out_cap, "\nR1,0,%X\r", words);
     if(n <= 0 || (size_t)n >= out_cap) return false;
@@ -92,7 +92,7 @@ bool fm504_protocol_make_read_epc_cmd(uint8_t words, uint8_t* out, size_t out_ca
     return true;
 }
 
-bool fm504_protocol_make_read_user_cmd(
+bool uhf_protocol_make_read_user_cmd(
     uint8_t addr_words,
     uint8_t words,
     uint8_t* out,
@@ -105,7 +105,7 @@ bool fm504_protocol_make_read_user_cmd(
     return true;
 }
 
-bool fm504_protocol_make_set_tx_power_cmd(
+bool uhf_protocol_make_set_tx_power_cmd(
     int8_t dbm,
     uint8_t* out,
     size_t out_cap,
@@ -121,13 +121,13 @@ bool fm504_protocol_make_set_tx_power_cmd(
     return true;
 }
 
-bool fm504_protocol_make_write_epc_cmd(
+bool uhf_protocol_make_write_epc_cmd(
     const char* epc_hex,
     uint8_t* out,
     size_t out_cap,
     size_t* out_len) {
     if(!epc_hex || !out || !out_len) return false;
-    if(!fm504_protocol_is_valid_epc(epc_hex)) return false;
+    if(!uhf_protocol_is_valid_epc(epc_hex)) return false;
 
     /* Inference from FM505 manual:
        R example is R2,0,4 (bank,address,length).
@@ -142,14 +142,14 @@ bool fm504_protocol_make_write_epc_cmd(
     return true;
 }
 
-bool fm504_protocol_make_write_user_cmd(
+bool uhf_protocol_make_write_user_cmd(
     uint8_t addr_words,
     const char* user_hex,
     uint8_t* out,
     size_t out_cap,
     size_t* out_len) {
     if(!user_hex || !out || !out_len) return false;
-    if(!fm504_protocol_is_valid_epc(user_hex)) return false;
+    if(!uhf_protocol_is_valid_epc(user_hex)) return false;
 
     size_t hex_len = strlen(user_hex);
     size_t len_words = hex_len / 4;
@@ -160,11 +160,11 @@ bool fm504_protocol_make_write_user_cmd(
     return true;
 }
 
-bool fm504_protocol_parse_inventory(const uint8_t* frame, size_t frame_len, Fm504InventoryResult* out) {
-    return fm504_protocol_parse_epc_read(frame, frame_len, out);
+bool uhf_protocol_parse_inventory(const uint8_t* frame, size_t frame_len, UhfInventoryResult* out) {
+    return uhf_protocol_parse_epc_read(frame, frame_len, out);
 }
 
-bool fm504_protocol_parse_tid_read(const uint8_t* frame, size_t frame_len, Fm504InventoryResult* out) {
+bool uhf_protocol_parse_tid_read(const uint8_t* frame, size_t frame_len, UhfInventoryResult* out) {
     if(!frame || !out || frame_len == 0) return false;
 
     char buff[128];
@@ -185,7 +185,7 @@ bool fm504_protocol_parse_tid_read(const uint8_t* frame, size_t frame_len, Fm504
     return true;
 }
 
-bool fm504_protocol_parse_epc_read(const uint8_t* frame, size_t frame_len, Fm504InventoryResult* out) {
+bool uhf_protocol_parse_epc_read(const uint8_t* frame, size_t frame_len, UhfInventoryResult* out) {
     if(!frame || !out || frame_len == 0) return false;
 
     char buff[128];
@@ -226,7 +226,7 @@ bool fm504_protocol_parse_epc_read(const uint8_t* frame, size_t frame_len, Fm504
     return true;
 }
 
-bool fm504_protocol_parse_user_read(const uint8_t* frame, size_t frame_len, Fm504InventoryResult* out) {
+bool uhf_protocol_parse_user_read(const uint8_t* frame, size_t frame_len, UhfInventoryResult* out) {
     if(!frame || !out || frame_len == 0) return false;
 
     char buff[128];
@@ -249,7 +249,7 @@ bool fm504_protocol_parse_user_read(const uint8_t* frame, size_t frame_len, Fm50
     return true;
 }
 
-bool fm504_protocol_response_is_ok(const uint8_t* frame, size_t frame_len) {
+bool uhf_protocol_response_is_ok(const uint8_t* frame, size_t frame_len) {
     if(!frame || frame_len == 0) return false;
 
     char buff[96];

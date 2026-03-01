@@ -7,19 +7,19 @@
 #include <stdbool.h>
 
 typedef enum {
-    Fm504ScanModeEpc = 0,
-    Fm504ScanModeTid,
-    Fm504ScanModeUser,
-} Fm504ScanMode;
+    UhfScanModeEpc = 0,
+    UhfScanModeTid,
+    UhfScanModeUser,
+} UhfScanMode;
 
-bool fm504_reader_inventory_once(Fm504Uart* uart, Fm504ScanMode mode, Fm504InventoryResult* out);
-bool fm504_reader_write_epc(Fm504Uart* uart, const char* epc_hex);
-bool fm504_reader_write_epc_ex(Fm504Uart* uart, const char* epc_hex, char* detail, size_t detail_cap);
-bool fm504_reader_write_user_ex(
-    Fm504Uart* uart,
+bool uhf_reader_inventory_once(UhfUart* uart, UhfScanMode mode, UhfInventoryResult* out);
+bool uhf_reader_write_epc(UhfUart* uart, const char* epc_hex);
+bool uhf_reader_write_epc_ex(UhfUart* uart, const char* epc_hex, char* detail, size_t detail_cap);
+bool uhf_reader_write_user_ex(
+    UhfUart* uart,
     uint8_t addr_words,
     const char* user_hex,
     char* detail,
     size_t detail_cap);
-bool fm504_reader_access_pwd(Fm504Uart* uart, const char* access_pwd_hex, char* detail, size_t detail_cap);
-bool fm504_reader_set_tx_power(Fm504Uart* uart, int8_t dbm);
+bool uhf_reader_access_pwd(UhfUart* uart, const char* access_pwd_hex, char* detail, size_t detail_cap);
+bool uhf_reader_set_tx_power(UhfUart* uart, int8_t dbm);

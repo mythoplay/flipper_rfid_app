@@ -194,13 +194,13 @@ typedef struct {
     size_t saved_tags_count;
     size_t saved_selected_idx;
     char saved_tag_text[320];
-} Fm504App;
+} FlipperRfidApp;
 
-static void fm504_app_free(Fm504App* app);
-static bool fm504_add_or_update_tag(Fm504App* app, const RfidTagRead* tag);
-static void fm504_persist_settings(Fm504App* app);
+static void flipper_rfid_app_free(FlipperRfidApp* app);
+static bool flipper_rfid_add_or_update_tag(FlipperRfidApp* app, const RfidTagRead* tag);
+static void flipper_rfid_persist_settings(FlipperRfidApp* app);
 
-static const char* fm504_scan_mode_name(RfidScanMode mode) {
+static const char* flipper_rfid_scan_mode_name(RfidScanMode mode) {
     switch(mode) {
     case RfidScanModeTid:
         return "TID";
@@ -214,14 +214,14 @@ static const char* fm504_scan_mode_name(RfidScanMode mode) {
     }
 }
 
-static void fm504_scan_all_reset(Fm504App* app) {
+static void flipper_rfid_scan_all_reset(FlipperRfidApp* app) {
     if(!app) return;
     app->scan_all_count = 0;
     app->scan_all_selected = 0;
     memset(app->scan_all_entries, 0, sizeof(app->scan_all_entries));
 }
 
-static size_t fm504_scan_all_find_by_epc(Fm504App* app, const char* epc) {
+static size_t flipper_rfid_scan_all_find_by_epc(FlipperRfidApp* app, const char* epc) {
     if(!app || !epc || epc[0] == '\0') return SIZE_MAX;
     for(size_t i = 0; i < app->scan_all_count; i++) {
         if(strcmp(app->scan_all_entries[i].epc, epc) == 0) return i;
@@ -229,12 +229,12 @@ static size_t fm504_scan_all_find_by_epc(Fm504App* app, const char* epc) {
     return SIZE_MAX;
 }
 
-static void fm504_scan_all_record(Fm504App* app, const char* bank, const char* value) {
+static void flipper_rfid_scan_all_record(FlipperRfidApp* app, const char* bank, const char* value) {
     if(!app || !bank || !value || value[0] == '\0') return;
     if(app->scan_all_selected >= MAX_TAGS) app->scan_all_selected = 0;
 
     if(strcmp(bank, "EPC") == 0) {
-        size_t idx = fm504_scan_all_find_by_epc(app, value);
+        size_t idx = flipper_rfid_scan_all_find_by_epc(app, value);
         if(idx == SIZE_MAX) {
             if(app->scan_all_count >= MAX_TAGS) return;
             idx = app->scan_all_count++;
@@ -256,7 +256,7 @@ static void fm504_scan_all_record(Fm504App* app, const char* bank, const char* v
     }
 }
 
-static void fm504_scan_all_build_preview(const Fm504App* app, char* out, size_t out_cap) {
+static void flipper_rfid_scan_all_build_preview(const FlipperRfidApp* app, char* out, size_t out_cap) {
     if(!app || !out || out_cap < 2) return;
     if(app->scan_all_count == 0 || app->scan_all_selected >= app->scan_all_count) {
         snprintf(out, out_cap, "E:No EPC\nT:No TID\nU:No USER");
@@ -272,7 +272,7 @@ static void fm504_scan_all_build_preview(const Fm504App* app, char* out, size_t 
         (e->user[0] != '\0') ? e->user : "No USER");
 }
 
-static RfidScanMode fm504_effective_driver_mode(RfidScanMode mode, uint8_t all_step) {
+static RfidScanMode flipper_rfid_effective_driver_mode(RfidScanMode mode, uint8_t all_step) {
     if(mode == RfidScanModeTid) return RfidScanModeTid;
     if(mode == RfidScanModeUser) return RfidScanModeUser;
     if(mode == RfidScanModeAll) {
@@ -283,12 +283,12 @@ static RfidScanMode fm504_effective_driver_mode(RfidScanMode mode, uint8_t all_s
     return RfidScanModeEpc;
 }
 
-static void fm504_apply_scan_mode_to_driver(Fm504App* app) {
+static void flipper_rfid_apply_scan_mode_to_driver(FlipperRfidApp* app) {
     if(!app || !app->driver) return;
-    rfid_driver_set_mode(app->driver, fm504_effective_driver_mode(app->scan_mode, app->scan_all_step));
+    rfid_driver_set_mode(app->driver, flipper_rfid_effective_driver_mode(app->scan_mode, app->scan_all_step));
 }
 
-static void fm504_persist_settings(Fm504App* app) {
+static void flipper_rfid_persist_settings(FlipperRfidApp* app) {
     if(!app) return;
     RfidAppSettings settings = {
         .module = app->current_module,
@@ -302,14 +302,14 @@ static void fm504_persist_settings(Fm504App* app) {
     (void)storage_settings_save(&settings);
 }
 
-static void fm504_switch_view(Fm504App* app, ViewId view_id) {
+static void flipper_rfid_switch_view(FlipperRfidApp* app, ViewId view_id) {
     if(!app || app->closing || !app->view_dispatcher) return;
     app->current_view = view_id;
     view_dispatcher_switch_to_view(app->view_dispatcher, view_id);
 }
 
-static void fm504_scan_button_callback(GuiButtonType button, InputType type, void* context) {
-    Fm504App* app = context;
+static void flipper_rfid_scan_button_callback(GuiButtonType button, InputType type, void* context) {
+    FlipperRfidApp* app = context;
     if(!app || app->closing || !app->view_dispatcher) return;
 
     uint32_t event = EventScanToggle;
@@ -331,9 +331,9 @@ static void fm504_scan_button_callback(GuiButtonType button, InputType type, voi
     view_dispatcher_send_custom_event(app->view_dispatcher, event);
 }
 
-static void fm504_write_result_button_callback(GuiButtonType button, InputType type, void* context) {
+static void flipper_rfid_write_result_button_callback(GuiButtonType button, InputType type, void* context) {
     if(type != InputTypeShort) return;
-    Fm504App* app = context;
+    FlipperRfidApp* app = context;
     if(!app || app->closing || !app->view_dispatcher) return;
 
     uint32_t event = EventWriteBack;
@@ -341,9 +341,9 @@ static void fm504_write_result_button_callback(GuiButtonType button, InputType t
     view_dispatcher_send_custom_event(app->view_dispatcher, event);
 }
 
-static void fm504_write_confirm_button_callback(GuiButtonType button, InputType type, void* context) {
+static void flipper_rfid_write_confirm_button_callback(GuiButtonType button, InputType type, void* context) {
     if(type != InputTypeShort) return;
-    Fm504App* app = context;
+    FlipperRfidApp* app = context;
     if(!app || app->closing || !app->view_dispatcher) return;
 
     uint32_t event = EventWriteDo;
@@ -352,7 +352,7 @@ static void fm504_write_confirm_button_callback(GuiButtonType button, InputType 
     view_dispatcher_send_custom_event(app->view_dispatcher, event);
 }
 
-static bool fm504_attempt_write_epc(Fm504App* app, const char* epc_hex, char* detail, size_t detail_cap) {
+static bool flipper_rfid_attempt_write_epc(FlipperRfidApp* app, const char* epc_hex, char* detail, size_t detail_cap) {
     if(!app || !app->driver || !epc_hex) return false;
     if(detail && detail_cap) detail[0] = '\0';
 
@@ -405,7 +405,7 @@ static bool fm504_attempt_write_epc(Fm504App* app, const char* epc_hex, char* de
     return ok;
 }
 
-static bool fm504_is_even_hex_max64(const char* s) {
+static bool flipper_rfid_is_even_hex_max64(const char* s) {
     if(!s) return false;
     size_t n = strlen(s);
     if(n == 0 || n > 64 || (n % 2) != 0) return false;
@@ -417,15 +417,15 @@ static bool fm504_is_even_hex_max64(const char* s) {
     return true;
 }
 
-static void fm504_uppercase_hex(char* s) {
+static void flipper_rfid_uppercase_hex(char* s) {
     if(!s) return;
     for(size_t i = 0; s[i] != '\0'; i++) {
         if(s[i] >= 'a' && s[i] <= 'f') s[i] = (char)(s[i] - 'a' + 'A');
     }
 }
 
-static bool fm504_attempt_write_user(
-    Fm504App* app,
+static bool flipper_rfid_attempt_write_user(
+    FlipperRfidApp* app,
     const char* user_hex,
     uint8_t addr_words,
     char* detail,
@@ -483,13 +483,13 @@ static bool fm504_attempt_write_user(
     return ok;
 }
 
-static void fm504_saved_tags_load(Fm504App* app) {
+static void flipper_rfid_saved_tags_load(FlipperRfidApp* app) {
     if(!app) return;
     app->saved_tags_count = storage_saved_tags_load(app->saved_tags, MAX_TAGS);
     if(app->saved_selected_idx >= app->saved_tags_count) app->saved_selected_idx = 0;
 }
 
-static void fm504_draw_lock_icon(Widget* widget, bool locked) {
+static void flipper_rfid_draw_lock_icon(Widget* widget, bool locked) {
     if(!widget) return;
 
     const uint8_t x = 116;
@@ -512,35 +512,35 @@ static void fm504_draw_lock_icon(Widget* widget, bool locked) {
     }
 }
 
-static void fm504_refresh_write_confirm_view(Fm504App* app) {
+static void flipper_rfid_refresh_write_confirm_view(FlipperRfidApp* app) {
     if(!app || !app->write_confirm_widget) return;
     widget_reset(app->write_confirm_widget);
 
-    fm504_draw_lock_icon(app->write_confirm_widget, app->use_access_password);
+    flipper_rfid_draw_lock_icon(app->write_confirm_widget, app->use_access_password);
     widget_add_string_element(
         app->write_confirm_widget, 2, 2, AlignLeft, AlignTop, FontPrimary, "Write Confirm");
     widget_add_string_element(app->write_confirm_widget, 2, 16, AlignLeft, AlignTop, FontSecondary, "EPC:");
     widget_add_text_box_element(
         app->write_confirm_widget, 2, 24, 124, 22, AlignLeft, AlignTop, app->last_write_epc, true);
     widget_add_button_element(
-        app->write_confirm_widget, GuiButtonTypeLeft, "Back", fm504_write_confirm_button_callback, app);
+        app->write_confirm_widget, GuiButtonTypeLeft, "Back", flipper_rfid_write_confirm_button_callback, app);
     widget_add_button_element(
-        app->write_confirm_widget, GuiButtonTypeCenter, "Write", fm504_write_confirm_button_callback, app);
+        app->write_confirm_widget, GuiButtonTypeCenter, "Write", flipper_rfid_write_confirm_button_callback, app);
     widget_add_button_element(
-        app->write_confirm_widget, GuiButtonTypeRight, "Lock", fm504_write_confirm_button_callback, app);
+        app->write_confirm_widget, GuiButtonTypeRight, "Lock", flipper_rfid_write_confirm_button_callback, app);
 }
 
-static void fm504_vibro_read(Fm504App* app) {
+static void flipper_rfid_vibro_read(FlipperRfidApp* app) {
     if(!app || !app->notification) return;
     notification_message(app->notification, &sequence_single_vibro);
 }
 
-static void fm504_vibro_write_ok(Fm504App* app) {
+static void flipper_rfid_vibro_write_ok(FlipperRfidApp* app) {
     if(!app || !app->notification) return;
     notification_message(app->notification, &sequence_double_vibro);
 }
 
-static void fm504_draw_result_widget(
+static void flipper_rfid_draw_result_widget(
     Widget* widget,
     const char* title,
     bool ok,
@@ -564,9 +564,9 @@ static void fm504_draw_result_widget(
     if(right_label) widget_add_button_element(widget, GuiButtonTypeRight, right_label, callback, ctx);
 }
 
-static void fm504_refresh_write_result_view(Fm504App* app) {
+static void flipper_rfid_refresh_write_result_view(FlipperRfidApp* app) {
     if(!app || !app->write_result_widget) return;
-    fm504_draw_result_widget(
+    flipper_rfid_draw_result_widget(
         app->write_result_widget,
         "Write Result",
         app->last_write_ok,
@@ -575,13 +575,13 @@ static void fm504_refresh_write_result_view(Fm504App* app) {
         "Back",
         "Retry",
         "Menu",
-        fm504_write_result_button_callback,
+        flipper_rfid_write_result_button_callback,
         app);
 }
 
-static void fm504_clone_source_button_callback(GuiButtonType button, InputType type, void* context) {
+static void flipper_rfid_clone_source_button_callback(GuiButtonType button, InputType type, void* context) {
     if(type != InputTypeShort) return;
-    Fm504App* app = context;
+    FlipperRfidApp* app = context;
     if(!app || app->closing || !app->view_dispatcher) return;
 
     uint32_t event = EventCloneSourceRead;
@@ -589,9 +589,9 @@ static void fm504_clone_source_button_callback(GuiButtonType button, InputType t
     view_dispatcher_send_custom_event(app->view_dispatcher, event);
 }
 
-static void fm504_clone_target_button_callback(GuiButtonType button, InputType type, void* context) {
+static void flipper_rfid_clone_target_button_callback(GuiButtonType button, InputType type, void* context) {
     if(type != InputTypeShort) return;
-    Fm504App* app = context;
+    FlipperRfidApp* app = context;
     if(!app || app->closing || !app->view_dispatcher) return;
 
     uint32_t event = EventCloneTargetWrite;
@@ -600,19 +600,19 @@ static void fm504_clone_target_button_callback(GuiButtonType button, InputType t
     view_dispatcher_send_custom_event(app->view_dispatcher, event);
 }
 
-static void fm504_clone_result_button_callback(GuiButtonType button, InputType type, void* context) {
+static void flipper_rfid_clone_result_button_callback(GuiButtonType button, InputType type, void* context) {
     if(type != InputTypeShort) return;
     UNUSED(button);
-    Fm504App* app = context;
+    FlipperRfidApp* app = context;
     if(!app || app->closing || !app->view_dispatcher) return;
 
     uint32_t event = EventCloneTargetRetry;
     view_dispatcher_send_custom_event(app->view_dispatcher, event);
 }
 
-static void fm504_protection_button_callback(GuiButtonType button, InputType type, void* context) {
+static void flipper_rfid_protection_button_callback(GuiButtonType button, InputType type, void* context) {
     if(type != InputTypeShort) return;
-    Fm504App* app = context;
+    FlipperRfidApp* app = context;
     if(!app || app->closing || !app->view_dispatcher) return;
 
     uint32_t event = EventProtectionRun;
@@ -620,9 +620,9 @@ static void fm504_protection_button_callback(GuiButtonType button, InputType typ
     view_dispatcher_send_custom_event(app->view_dispatcher, event);
 }
 
-static void fm504_saved_tag_button_callback(GuiButtonType button, InputType type, void* context) {
+static void flipper_rfid_saved_tag_button_callback(GuiButtonType button, InputType type, void* context) {
     if(type != InputTypeShort) return;
-    Fm504App* app = context;
+    FlipperRfidApp* app = context;
     if(!app || app->closing || !app->view_dispatcher) return;
 
     uint32_t event = EventSavedTagBack;
@@ -631,7 +631,7 @@ static void fm504_saved_tag_button_callback(GuiButtonType button, InputType type
     view_dispatcher_send_custom_event(app->view_dispatcher, event);
 }
 
-static bool fm504_clone_capture_source(Fm504App* app) {
+static bool flipper_rfid_clone_capture_source(FlipperRfidApp* app) {
     if(!app || !app->driver) return false;
 
     if(!rfid_driver_set_enabled(app->driver, true)) return false;
@@ -639,7 +639,7 @@ static bool fm504_clone_capture_source(Fm504App* app) {
     uint8_t prev_all_step = app->scan_all_step;
     app->scan_mode = RfidScanModeEpc;
     app->scan_all_step = 0;
-    fm504_apply_scan_mode_to_driver(app);
+    flipper_rfid_apply_scan_mode_to_driver(app);
 
     /* Warm up and retry reads to avoid missing the source tag in a single-shot call. */
     furi_delay_ms(120);
@@ -657,19 +657,19 @@ static bool fm504_clone_capture_source(Fm504App* app) {
 
     app->scan_mode = previous_mode;
     app->scan_all_step = prev_all_step;
-    fm504_apply_scan_mode_to_driver(app);
+    flipper_rfid_apply_scan_mode_to_driver(app);
     rfid_driver_set_enabled(app->driver, false);
     if(!ok) return false;
 
     strncpy(app->clone_source_epc, tag.primary_hex, sizeof(app->clone_source_epc) - 1);
     app->clone_source_epc[sizeof(app->clone_source_epc) - 1] = '\0';
-    (void)fm504_add_or_update_tag(app, &tag);
-    fm504_vibro_read(app);
+    (void)flipper_rfid_add_or_update_tag(app, &tag);
+    flipper_rfid_vibro_read(app);
     return true;
 }
 
-static bool fm504_capture_single_epc_with_params(
-    Fm504App* app,
+static bool flipper_rfid_capture_single_epc_with_params(
+    FlipperRfidApp* app,
     char* out_epc,
     size_t out_cap,
     size_t tries,
@@ -681,12 +681,12 @@ static bool fm504_capture_single_epc_with_params(
     uint8_t prev_all_step = app->scan_all_step;
     app->scan_mode = RfidScanModeEpc;
     app->scan_all_step = 0;
-    fm504_apply_scan_mode_to_driver(app);
+    flipper_rfid_apply_scan_mode_to_driver(app);
 
     if(!rfid_driver_set_enabled(app->driver, true)) {
         app->scan_mode = prev_mode;
         app->scan_all_step = prev_all_step;
-        fm504_apply_scan_mode_to_driver(app);
+        flipper_rfid_apply_scan_mode_to_driver(app);
         return false;
     }
 
@@ -699,8 +699,8 @@ static bool fm504_capture_single_epc_with_params(
         if(rfid_driver_scan_once(app->driver, &tag) && tag.primary_hex[0] != '\0') {
             strncpy(out_epc, tag.primary_hex, out_cap - 1);
             out_epc[out_cap - 1] = '\0';
-            (void)fm504_add_or_update_tag(app, &tag);
-            fm504_vibro_read(app);
+            (void)flipper_rfid_add_or_update_tag(app, &tag);
+            flipper_rfid_vibro_read(app);
             ok = true;
             break;
         }
@@ -710,22 +710,22 @@ static bool fm504_capture_single_epc_with_params(
     rfid_driver_set_enabled(app->driver, false);
     app->scan_mode = prev_mode;
     app->scan_all_step = prev_all_step;
-    fm504_apply_scan_mode_to_driver(app);
+    flipper_rfid_apply_scan_mode_to_driver(app);
     return ok;
 }
 
-static void fm504_run_protection_check(Fm504App* app) {
+static void flipper_rfid_run_protection_check(FlipperRfidApp* app) {
     if(!app) return;
 
     app->protection_epc[0] = '\0';
-    if(!fm504_capture_single_epc_with_params(app, app->protection_epc, sizeof(app->protection_epc), 30, 180, 80)) {
+    if(!flipper_rfid_capture_single_epc_with_params(app, app->protection_epc, sizeof(app->protection_epc), 30, 180, 80)) {
         snprintf(app->protection_status, sizeof(app->protection_status), "NO TAG");
         snprintf(app->protection_detail, sizeof(app->protection_detail), "No EPC detected");
         return;
     }
 
     char write_detail[64];
-    bool write_ok = fm504_attempt_write_epc(app, app->protection_epc, write_detail, sizeof(write_detail));
+    bool write_ok = flipper_rfid_attempt_write_epc(app, app->protection_epc, write_detail, sizeof(write_detail));
     if(write_ok) {
         snprintf(app->protection_status, sizeof(app->protection_status), "NOT PROTECTED");
         snprintf(
@@ -748,7 +748,7 @@ static void fm504_run_protection_check(Fm504App* app) {
     }
 }
 
-static void fm504_refresh_clone_source_view(Fm504App* app) {
+static void flipper_rfid_refresh_clone_source_view(FlipperRfidApp* app) {
     if(!app || !app->clone_source_widget) return;
 
     widget_reset(app->clone_source_widget);
@@ -775,12 +775,12 @@ static void fm504_refresh_clone_source_view(Fm504App* app) {
     widget_add_text_box_element(
         app->clone_source_widget, 2, 34, 124, 20, AlignLeft, AlignTop, app->clone_info_line, true);
     widget_add_button_element(
-        app->clone_source_widget, GuiButtonTypeLeft, "Retry", fm504_clone_source_button_callback, app);
+        app->clone_source_widget, GuiButtonTypeLeft, "Retry", flipper_rfid_clone_source_button_callback, app);
     widget_add_button_element(
-        app->clone_source_widget, GuiButtonTypeCenter, "Read", fm504_clone_source_button_callback, app);
+        app->clone_source_widget, GuiButtonTypeCenter, "Read", flipper_rfid_clone_source_button_callback, app);
 }
 
-static void fm504_refresh_clone_target_view(Fm504App* app) {
+static void flipper_rfid_refresh_clone_target_view(FlipperRfidApp* app) {
     if(!app || !app->clone_target_widget) return;
     widget_reset(app->clone_target_widget);
 
@@ -806,16 +806,16 @@ static void fm504_refresh_clone_target_view(Fm504App* app) {
         app->clone_source_epc,
         true);
     widget_add_button_element(
-        app->clone_target_widget, GuiButtonTypeLeft, "Retry", fm504_clone_target_button_callback, app);
+        app->clone_target_widget, GuiButtonTypeLeft, "Retry", flipper_rfid_clone_target_button_callback, app);
     widget_add_button_element(
-        app->clone_target_widget, GuiButtonTypeCenter, "Write", fm504_clone_target_button_callback, app);
+        app->clone_target_widget, GuiButtonTypeCenter, "Write", flipper_rfid_clone_target_button_callback, app);
     widget_add_button_element(
-        app->clone_target_widget, GuiButtonTypeRight, "Lock", fm504_clone_target_button_callback, app);
+        app->clone_target_widget, GuiButtonTypeRight, "Lock", flipper_rfid_clone_target_button_callback, app);
 }
 
-static void fm504_refresh_clone_result_view(Fm504App* app) {
+static void flipper_rfid_refresh_clone_result_view(FlipperRfidApp* app) {
     if(!app || !app->clone_result_widget) return;
-    fm504_draw_result_widget(
+    flipper_rfid_draw_result_widget(
         app->clone_result_widget,
         "Clone Result",
         app->clone_result_ok,
@@ -824,16 +824,16 @@ static void fm504_refresh_clone_result_view(Fm504App* app) {
         NULL,
         "Retry",
         NULL,
-        fm504_clone_result_button_callback,
+        flipper_rfid_clone_result_button_callback,
         app);
 }
 
-static bool fm504_is_checking_status(const char* s) {
+static bool flipper_rfid_is_checking_status(const char* s) {
     if(!s) return false;
     return strncmp(s, "CHECKING", 8) == 0;
 }
 
-static void fm504_add_detecting_art(Widget* w) {
+static void flipper_rfid_add_detecting_art(Widget* w) {
     if(!w) return;
     /* Head contour (closer to Flipper dolphin profile) */
     widget_add_line_element(w, 4, 34, 10, 26);
@@ -882,18 +882,18 @@ static void fm504_add_detecting_art(Widget* w) {
     widget_add_line_element(w, 88, 26, 92, 23);
 }
 
-static void fm504_refresh_protection_view(Fm504App* app) {
+static void flipper_rfid_refresh_protection_view(FlipperRfidApp* app) {
     if(!app || !app->protection_widget) return;
     widget_reset(app->protection_widget);
 
-    if(fm504_is_checking_status(app->protection_status)) {
-        fm504_add_detecting_art(app->protection_widget);
+    if(flipper_rfid_is_checking_status(app->protection_status)) {
+        flipper_rfid_add_detecting_art(app->protection_widget);
         widget_add_string_element(
             app->protection_widget, 62, 34, AlignLeft, AlignTop, FontPrimary, "Detecting");
         widget_add_string_element(
             app->protection_widget, 62, 46, AlignLeft, AlignTop, FontPrimary, "[UHF] RFID");
         widget_add_button_element(
-            app->protection_widget, GuiButtonTypeLeft, "Back", fm504_protection_button_callback, app);
+            app->protection_widget, GuiButtonTypeLeft, "Back", flipper_rfid_protection_button_callback, app);
     } else {
         widget_add_string_element(
             app->protection_widget, 2, 2, AlignLeft, AlignTop, FontPrimary, "Check Protection");
@@ -904,13 +904,13 @@ static void fm504_refresh_protection_view(Fm504App* app) {
         widget_add_text_box_element(
             app->protection_widget, 2, 42, 124, 14, AlignLeft, AlignTop, app->protection_detail, true);
         widget_add_button_element(
-            app->protection_widget, GuiButtonTypeLeft, "Back", fm504_protection_button_callback, app);
+            app->protection_widget, GuiButtonTypeLeft, "Back", flipper_rfid_protection_button_callback, app);
         widget_add_button_element(
-            app->protection_widget, GuiButtonTypeCenter, "Check", fm504_protection_button_callback, app);
+            app->protection_widget, GuiButtonTypeCenter, "Check", flipper_rfid_protection_button_callback, app);
     }
 }
 
-static void fm504_build_scan_preview_line(const char* in, char* out, size_t out_cap) {
+static void flipper_rfid_build_scan_preview_line(const char* in, char* out, size_t out_cap) {
     if(!in || !out || out_cap < 2) return;
 
     size_t in_len = strlen(in);
@@ -937,7 +937,7 @@ static void fm504_build_scan_preview_line(const char* in, char* out, size_t out_
     out[j] = '\0';
 }
 
-static void fm504_refresh_scan_view(Fm504App* app) {
+static void flipper_rfid_refresh_scan_view(FlipperRfidApp* app) {
     if(!app || !app->scan_widget) return;
     char qty_line[28];
     const char* line_value = app->scan_last_line;
@@ -957,7 +957,7 @@ static void fm504_refresh_scan_view(Fm504App* app) {
             "Scan > ALL %ddB %ums",
             app->tx_power_db,
             app->read_rate_ms);
-        fm504_scan_all_build_preview(app, app->scan_preview_line, sizeof(app->scan_preview_line));
+        flipper_rfid_scan_all_build_preview(app, app->scan_preview_line, sizeof(app->scan_preview_line));
         line_value = app->scan_preview_line;
         left_label = "Tag-";
         right_label = "Tag+";
@@ -973,13 +973,13 @@ static void fm504_refresh_scan_view(Fm504App* app) {
             app->scan_mode_line,
             sizeof(app->scan_mode_line),
             "Scan > %s %ddB %ums",
-            fm504_scan_mode_name(app->scan_mode),
+            flipper_rfid_scan_mode_name(app->scan_mode),
             app->tx_power_db,
             app->read_rate_ms);
         snprintf(qty_line, sizeof(qty_line), "Qty: %u", (unsigned)app->tags_count);
     }
     if(app->scan_mode != RfidScanModeAll) {
-        fm504_build_scan_preview_line(line_value, app->scan_preview_line, sizeof(app->scan_preview_line));
+        flipper_rfid_build_scan_preview_line(line_value, app->scan_preview_line, sizeof(app->scan_preview_line));
         widget_add_text_box_element(
             app->scan_widget, 2, 26, 124, 28, AlignLeft, AlignTop, app->scan_preview_line, true);
     } else {
@@ -989,17 +989,17 @@ static void fm504_refresh_scan_view(Fm504App* app) {
     widget_add_string_element(app->scan_widget, 2, 4, AlignLeft, AlignTop, FontPrimary, app->scan_mode_line);
     widget_add_string_element(app->scan_widget, 2, 16, AlignLeft, AlignTop, FontSecondary, qty_line);
 
-    widget_add_button_element(app->scan_widget, GuiButtonTypeLeft, left_label, fm504_scan_button_callback, app);
+    widget_add_button_element(app->scan_widget, GuiButtonTypeLeft, left_label, flipper_rfid_scan_button_callback, app);
     widget_add_button_element(
         app->scan_widget,
         GuiButtonTypeCenter,
         app->scan_running ? "Stop" : "Start",
-        fm504_scan_button_callback,
+        flipper_rfid_scan_button_callback,
         app);
-    widget_add_button_element(app->scan_widget, GuiButtonTypeRight, right_label, fm504_scan_button_callback, app);
+    widget_add_button_element(app->scan_widget, GuiButtonTypeRight, right_label, flipper_rfid_scan_button_callback, app);
 }
 
-static void fm504_refresh_about(Fm504App* app) {
+static void flipper_rfid_refresh_about(FlipperRfidApp* app) {
     widget_reset(app->about_widget);
     widget_add_text_box_element(
         app->about_widget,
@@ -1015,7 +1015,7 @@ static void fm504_refresh_about(Fm504App* app) {
         true);
 }
 
-static bool fm504_reopen_driver(Fm504App* app, RfidModuleType module) {
+static bool flipper_rfid_reopen_driver(FlipperRfidApp* app, RfidModuleType module) {
     if(!app) return false;
 
     RfidDriverConfig cfg = {
@@ -1039,41 +1039,41 @@ static bool fm504_reopen_driver(Fm504App* app, RfidModuleType module) {
     return true;
 }
 
-static uint32_t fm504_prev_to_main_callback(void* context) {
+static uint32_t flipper_rfid_prev_to_main_callback(void* context) {
     UNUSED(context);
     return ViewIdMainMenu;
 }
 
-static uint32_t fm504_prev_exit_callback(void* context) {
+static uint32_t flipper_rfid_prev_exit_callback(void* context) {
     UNUSED(context);
     return VIEW_NONE;
 }
 
-static void fm504_submenu_event(void* context, uint32_t index) {
-    Fm504App* app = context;
+static void flipper_rfid_submenu_event(void* context, uint32_t index) {
+    FlipperRfidApp* app = context;
     if(!app || app->closing || !app->view_dispatcher) return;
     view_dispatcher_send_custom_event(app->view_dispatcher, index);
 }
 
-static void fm504_write_done_callback(void* context) {
-    Fm504App* app = context;
+static void flipper_rfid_write_done_callback(void* context) {
+    FlipperRfidApp* app = context;
     if(!app || app->closing || !app->view_dispatcher) return;
     view_dispatcher_send_custom_event(app->view_dispatcher, EventWriteCommit);
 }
 
-static void fm504_write_user_done_callback(void* context) {
-    Fm504App* app = context;
+static void flipper_rfid_write_user_done_callback(void* context) {
+    FlipperRfidApp* app = context;
     if(!app || app->closing || !app->view_dispatcher) return;
     view_dispatcher_send_custom_event(app->view_dispatcher, EventWriteUserCommit);
 }
 
-static void fm504_access_pwd_done_callback(void* context) {
-    Fm504App* app = context;
+static void flipper_rfid_access_pwd_done_callback(void* context) {
+    FlipperRfidApp* app = context;
     if(!app || app->closing || !app->view_dispatcher) return;
     view_dispatcher_send_custom_event(app->view_dispatcher, EventAccessPwdCommit);
 }
 
-static bool fm504_is_hex8(const char* s) {
+static bool flipper_rfid_is_hex8(const char* s) {
     if(!s) return false;
     size_t len = strlen(s);
     if(len != 8) return false;
@@ -1085,20 +1085,20 @@ static bool fm504_is_hex8(const char* s) {
     return true;
 }
 
-static void fm504_uppercase_str(char* s) {
+static void flipper_rfid_uppercase_str(char* s) {
     if(!s) return;
     for(size_t i = 0; s[i] != '\0'; i++) {
         if(s[i] >= 'a' && s[i] <= 'f') s[i] = (char)(s[i] - 'a' + 'A');
     }
 }
 
-static void fm504_scan_timer_callback(void* context) {
-    Fm504App* app = context;
+static void flipper_rfid_scan_timer_callback(void* context) {
+    FlipperRfidApp* app = context;
     if(!app || app->closing || !app->view_dispatcher || !app->scan_running) return;
     view_dispatcher_send_custom_event(app->view_dispatcher, EventScanTick);
 }
 
-static bool fm504_add_or_update_tag(Fm504App* app, const RfidTagRead* tag) {
+static bool flipper_rfid_add_or_update_tag(FlipperRfidApp* app, const RfidTagRead* tag) {
     for(size_t i = 0; i < app->tags_count; i++) {
         if(strcmp(app->tags[i].primary_hex, tag->primary_hex) == 0) {
             app->tags[i].rssi = tag->rssi;
@@ -1114,12 +1114,12 @@ static bool fm504_add_or_update_tag(Fm504App* app, const RfidTagRead* tag) {
     return false;
 }
 
-static void fm504_build_write_select_menu(Fm504App* app) {
+static void flipper_rfid_build_write_select_menu(FlipperRfidApp* app) {
     submenu_reset(app->write_select_menu);
     submenu_set_header(app->write_select_menu, "Select Tag");
 
     if(app->tags_count == 0) {
-        submenu_add_item(app->write_select_menu, "No captures", EventWriteSelectBase, fm504_submenu_event, app);
+        submenu_add_item(app->write_select_menu, "No captures", EventWriteSelectBase, flipper_rfid_submenu_event, app);
         return;
     }
 
@@ -1131,19 +1131,19 @@ static void fm504_build_write_select_menu(Fm504App* app) {
             app->write_select_menu,
             label,
             EventWriteSelectBase + (uint32_t)i,
-            fm504_submenu_event,
+            flipper_rfid_submenu_event,
             app);
     }
 }
 
-static void fm504_build_saved_tags_menu(Fm504App* app) {
+static void flipper_rfid_build_saved_tags_menu(FlipperRfidApp* app) {
     if(!app || !app->saved_tags_menu) return;
-    fm504_saved_tags_load(app);
+    flipper_rfid_saved_tags_load(app);
     submenu_reset(app->saved_tags_menu);
     submenu_set_header(app->saved_tags_menu, "Saved Tags");
 
     if(app->saved_tags_count == 0) {
-        submenu_add_item(app->saved_tags_menu, "No saved tags", EventSavedSelectBase, fm504_submenu_event, app);
+        submenu_add_item(app->saved_tags_menu, "No saved tags", EventSavedSelectBase, flipper_rfid_submenu_event, app);
         return;
     }
 
@@ -1152,12 +1152,12 @@ static void fm504_build_saved_tags_menu(Fm504App* app) {
         const char* epc = app->saved_tags[i].epc[0] ? app->saved_tags[i].epc : "NO EPC";
         snprintf(label, sizeof(label), "%u) %.32s", (unsigned)(i + 1), epc);
         submenu_add_item(
-            app->saved_tags_menu, label, EventSavedSelectBase + (uint32_t)i, fm504_submenu_event, app);
+            app->saved_tags_menu, label, EventSavedSelectBase + (uint32_t)i, flipper_rfid_submenu_event, app);
     }
     submenu_set_selected_item(app->saved_tags_menu, EventSavedSelectBase + (uint32_t)app->saved_selected_idx);
 }
 
-static void fm504_refresh_saved_tag_view(Fm504App* app) {
+static void flipper_rfid_refresh_saved_tag_view(FlipperRfidApp* app) {
     if(!app || !app->saved_tag_widget) return;
     widget_reset(app->saved_tag_widget);
     widget_add_string_element(app->saved_tag_widget, 2, 2, AlignLeft, AlignTop, FontPrimary, "Saved Tag");
@@ -1178,20 +1178,20 @@ static void fm504_refresh_saved_tag_view(Fm504App* app) {
     }
 
     widget_add_button_element(
-        app->saved_tag_widget, GuiButtonTypeLeft, "Delete", fm504_saved_tag_button_callback, app);
+        app->saved_tag_widget, GuiButtonTypeLeft, "Delete", flipper_rfid_saved_tag_button_callback, app);
     widget_add_button_element(
-        app->saved_tag_widget, GuiButtonTypeCenter, "Back", fm504_saved_tag_button_callback, app);
+        app->saved_tag_widget, GuiButtonTypeCenter, "Back", flipper_rfid_saved_tag_button_callback, app);
     widget_add_button_element(
-        app->saved_tag_widget, GuiButtonTypeRight, "Clear", fm504_saved_tag_button_callback, app);
+        app->saved_tag_widget, GuiButtonTypeRight, "Clear", flipper_rfid_saved_tag_button_callback, app);
 }
 
-static void fm504_build_read_mode_menu(Fm504App* app) {
+static void flipper_rfid_build_read_mode_menu(FlipperRfidApp* app) {
     submenu_reset(app->read_mode_menu);
     submenu_set_header(app->read_mode_menu, "Read Mode");
-    submenu_add_item(app->read_mode_menu, "EPC", ModeActionEpc, fm504_submenu_event, app);
-    submenu_add_item(app->read_mode_menu, "TID", ModeActionTid, fm504_submenu_event, app);
-    submenu_add_item(app->read_mode_menu, "USER", ModeActionUser, fm504_submenu_event, app);
-    submenu_add_item(app->read_mode_menu, "ALL", ModeActionAll, fm504_submenu_event, app);
+    submenu_add_item(app->read_mode_menu, "EPC", ModeActionEpc, flipper_rfid_submenu_event, app);
+    submenu_add_item(app->read_mode_menu, "TID", ModeActionTid, flipper_rfid_submenu_event, app);
+    submenu_add_item(app->read_mode_menu, "USER", ModeActionUser, flipper_rfid_submenu_event, app);
+    submenu_add_item(app->read_mode_menu, "ALL", ModeActionAll, flipper_rfid_submenu_event, app);
     uint32_t selected = ModeActionEpc;
     if(app->scan_mode == RfidScanModeTid) selected = ModeActionTid;
     else if(app->scan_mode == RfidScanModeUser) selected = ModeActionUser;
@@ -1199,16 +1199,16 @@ static void fm504_build_read_mode_menu(Fm504App* app) {
     submenu_set_selected_item(app->read_mode_menu, selected);
 }
 
-static void fm504_build_module_menu(Fm504App* app) {
+static void flipper_rfid_build_module_menu(FlipperRfidApp* app) {
     submenu_reset(app->module_menu);
     submenu_set_header(app->module_menu, "Module");
-    submenu_add_item(app->module_menu, "FM504", ModuleActionFm504, fm504_submenu_event, app);
-    submenu_add_item(app->module_menu, "RE40 (Zebra)", ModuleActionRe40, fm504_submenu_event, app);
+    submenu_add_item(app->module_menu, "FM504", ModuleActionFm504, flipper_rfid_submenu_event, app);
+    submenu_add_item(app->module_menu, "RE40 (Zebra)", ModuleActionRe40, flipper_rfid_submenu_event, app);
     submenu_set_selected_item(
         app->module_menu, (app->current_module == RfidModuleRe40) ? ModuleActionRe40 : ModuleActionFm504);
 }
 
-static void fm504_build_tx_power_menu(Fm504App* app) {
+static void flipper_rfid_build_tx_power_menu(FlipperRfidApp* app) {
     submenu_reset(app->tx_power_menu);
     submenu_set_header(app->tx_power_menu, "TX Power (dB)");
 
@@ -1219,25 +1219,25 @@ static void fm504_build_tx_power_menu(Fm504App* app) {
             app->tx_power_menu,
             label,
             EventTxPowerBase + (uint32_t)(db + 2),
-            fm504_submenu_event,
+            flipper_rfid_submenu_event,
             app);
     }
     submenu_set_selected_item(app->tx_power_menu, EventTxPowerBase + (uint32_t)(app->tx_power_db + 2));
 }
 
-static void fm504_build_read_rate_menu(Fm504App* app) {
+static void flipper_rfid_build_read_rate_menu(FlipperRfidApp* app) {
     submenu_reset(app->read_rate_menu);
     submenu_set_header(app->read_rate_menu, "Read Rate (ms)");
 
-    submenu_add_item(app->read_rate_menu, "10", RateAction10, fm504_submenu_event, app);
-    submenu_add_item(app->read_rate_menu, "25", RateAction25, fm504_submenu_event, app);
-    submenu_add_item(app->read_rate_menu, "50", RateAction50, fm504_submenu_event, app);
-    submenu_add_item(app->read_rate_menu, "100", RateAction100, fm504_submenu_event, app);
-    submenu_add_item(app->read_rate_menu, "200", RateAction200, fm504_submenu_event, app);
-    submenu_add_item(app->read_rate_menu, "300", RateAction300, fm504_submenu_event, app);
-    submenu_add_item(app->read_rate_menu, "400", RateAction400, fm504_submenu_event, app);
-    submenu_add_item(app->read_rate_menu, "500", RateAction500, fm504_submenu_event, app);
-    submenu_add_item(app->read_rate_menu, "750", RateAction750, fm504_submenu_event, app);
+    submenu_add_item(app->read_rate_menu, "10", RateAction10, flipper_rfid_submenu_event, app);
+    submenu_add_item(app->read_rate_menu, "25", RateAction25, flipper_rfid_submenu_event, app);
+    submenu_add_item(app->read_rate_menu, "50", RateAction50, flipper_rfid_submenu_event, app);
+    submenu_add_item(app->read_rate_menu, "100", RateAction100, flipper_rfid_submenu_event, app);
+    submenu_add_item(app->read_rate_menu, "200", RateAction200, flipper_rfid_submenu_event, app);
+    submenu_add_item(app->read_rate_menu, "300", RateAction300, flipper_rfid_submenu_event, app);
+    submenu_add_item(app->read_rate_menu, "400", RateAction400, flipper_rfid_submenu_event, app);
+    submenu_add_item(app->read_rate_menu, "500", RateAction500, flipper_rfid_submenu_event, app);
+    submenu_add_item(app->read_rate_menu, "750", RateAction750, flipper_rfid_submenu_event, app);
 
     uint32_t selected = RateAction100;
     if(app->read_rate_ms == 10) selected = RateAction10;
@@ -1251,18 +1251,18 @@ static void fm504_build_read_rate_menu(Fm504App* app) {
     submenu_set_selected_item(app->read_rate_menu, selected);
 }
 
-static void fm504_build_config_menu(Fm504App* app) {
+static void flipper_rfid_build_config_menu(FlipperRfidApp* app) {
     submenu_reset(app->config_menu);
     submenu_set_header(app->config_menu, "Config");
-    submenu_add_item(app->config_menu, "Module", MainActionModule, fm504_submenu_event, app);
-    submenu_add_item(app->config_menu, "Read Mode", MainActionReadMode, fm504_submenu_event, app);
-    submenu_add_item(app->config_menu, "TX Power", MainActionTxPower, fm504_submenu_event, app);
-    submenu_add_item(app->config_menu, "Read Rate (ms)", MainActionReadRate, fm504_submenu_event, app);
+    submenu_add_item(app->config_menu, "Module", MainActionModule, flipper_rfid_submenu_event, app);
+    submenu_add_item(app->config_menu, "Read Mode", MainActionReadMode, flipper_rfid_submenu_event, app);
+    submenu_add_item(app->config_menu, "TX Power", MainActionTxPower, flipper_rfid_submenu_event, app);
+    submenu_add_item(app->config_menu, "Read Rate (ms)", MainActionReadRate, flipper_rfid_submenu_event, app);
     submenu_add_item(
-        app->config_menu, "Access Password", MainActionAccessPassword, fm504_submenu_event, app);
+        app->config_menu, "Access Password", MainActionAccessPassword, flipper_rfid_submenu_event, app);
 }
 
-static void fm504_apply_read_rate(Fm504App* app, uint16_t new_rate) {
+static void flipper_rfid_apply_read_rate(FlipperRfidApp* app, uint16_t new_rate) {
     app->read_rate_ms = new_rate;
     if(app->scan_running && app->scan_timer) {
         furi_timer_stop(app->scan_timer);
@@ -1270,8 +1270,8 @@ static void fm504_apply_read_rate(Fm504App* app, uint16_t new_rate) {
     }
 }
 
-static bool fm504_custom_event_callback(void* context, uint32_t event) {
-    Fm504App* app = context;
+static bool flipper_rfid_custom_event_callback(void* context, uint32_t event) {
+    FlipperRfidApp* app = context;
     if(!app || app->closing) return false;
 
     if(event >= EventTxPowerBase && event < EventTxPowerBase + 64) {
@@ -1282,8 +1282,8 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
         } else {
             snprintf(app->status_msg, sizeof(app->status_msg), "No ACK power (%ddB)", db);
         }
-        fm504_persist_settings(app);
-        fm504_switch_view(app, ViewIdMainMenu);
+        flipper_rfid_persist_settings(app);
+        flipper_rfid_switch_view(app, ViewIdMainMenu);
         return true;
     }
 
@@ -1291,7 +1291,7 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
         size_t idx = (size_t)(event - EventWriteSelectBase);
         if(idx >= app->tags_count) {
             snprintf(app->status_msg, sizeof(app->status_msg), "No tags to write");
-            fm504_switch_view(app, ViewIdMainMenu);
+            flipper_rfid_switch_view(app, ViewIdMainMenu);
             return true;
         }
 
@@ -1303,42 +1303,42 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
         text_input_set_header_text(app->write_input, "Edit EPC");
         text_input_set_result_callback(
             app->write_input,
-            fm504_write_done_callback,
+            flipper_rfid_write_done_callback,
             app,
             app->write_buffer,
             sizeof(app->write_buffer),
             false);
-        fm504_switch_view(app, ViewIdWriteInput);
+        flipper_rfid_switch_view(app, ViewIdWriteInput);
         return true;
     }
 
     if(event >= EventSavedSelectBase && event < EventSavedSelectBase + MAX_TAGS) {
         size_t idx = (size_t)(event - EventSavedSelectBase);
         if(idx >= app->saved_tags_count) {
-            fm504_switch_view(app, ViewIdSavedTags);
+            flipper_rfid_switch_view(app, ViewIdSavedTags);
             return true;
         }
         app->saved_selected_idx = idx;
-        fm504_refresh_saved_tag_view(app);
-        fm504_switch_view(app, ViewIdSavedTagDetail);
+        flipper_rfid_refresh_saved_tag_view(app);
+        flipper_rfid_switch_view(app, ViewIdSavedTagDetail);
         return true;
     }
 
     switch(event) {
     case MainActionScan:
-        fm504_refresh_scan_view(app);
-        fm504_switch_view(app, ViewIdScan);
+        flipper_rfid_refresh_scan_view(app);
+        flipper_rfid_switch_view(app, ViewIdScan);
         return true;
 
     case MainActionWriteTag:
         app->write_user_mode = false;
-        fm504_build_write_select_menu(app);
-        fm504_switch_view(app, ViewIdWriteSelect);
+        flipper_rfid_build_write_select_menu(app);
+        flipper_rfid_switch_view(app, ViewIdWriteSelect);
         return true;
 
     case MainActionWriteUser:
         app->write_user_mode = true;
-        fm504_saved_tags_load(app);
+        flipper_rfid_saved_tags_load(app);
         app->write_user_buffer[0] = '\0';
         if(app->saved_tags_count > 0 && app->saved_selected_idx < app->saved_tags_count) {
             strncpy(
@@ -1352,17 +1352,17 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
         text_input_set_header_text(app->write_input, "Edit USER HEX");
         text_input_set_result_callback(
             app->write_input,
-            fm504_write_user_done_callback,
+            flipper_rfid_write_user_done_callback,
             app,
             app->write_user_buffer,
             sizeof(app->write_user_buffer),
             false);
-        fm504_switch_view(app, ViewIdWriteInput);
+        flipper_rfid_switch_view(app, ViewIdWriteInput);
         return true;
 
     case MainActionSavedTags:
-        fm504_build_saved_tags_menu(app);
-        fm504_switch_view(app, ViewIdSavedTags);
+        flipper_rfid_build_saved_tags_menu(app);
+        flipper_rfid_switch_view(app, ViewIdSavedTags);
         return true;
 
     case MainActionAccessPassword:
@@ -1372,12 +1372,12 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
         text_input_set_header_text(app->access_input, "Access Password (8 HEX)");
         text_input_set_result_callback(
             app->access_input,
-            fm504_access_pwd_done_callback,
+            flipper_rfid_access_pwd_done_callback,
             app,
             app->access_input_buffer,
             sizeof(app->access_input_buffer),
             false);
-        fm504_switch_view(app, ViewIdAccessPassword);
+        flipper_rfid_switch_view(app, ViewIdAccessPassword);
         return true;
 
     case MainActionClone:
@@ -1387,8 +1387,8 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
         app->clone_source_epc[0] = '\0';
         snprintf(app->clone_result_detail, sizeof(app->clone_result_detail), "Ready");
         app->clone_result_ok = false;
-        fm504_refresh_clone_source_view(app);
-        fm504_switch_view(app, ViewIdCloneSource);
+        flipper_rfid_refresh_clone_source_view(app);
+        flipper_rfid_switch_view(app, ViewIdCloneSource);
         return true;
 
     case MainActionCheckProtection:
@@ -1396,159 +1396,159 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
         app->protection_epc[0] = '\0';
         snprintf(
             app->protection_detail, sizeof(app->protection_detail), "Place tag and press Check");
-        fm504_refresh_protection_view(app);
-        fm504_switch_view(app, ViewIdProtection);
+        flipper_rfid_refresh_protection_view(app);
+        flipper_rfid_switch_view(app, ViewIdProtection);
         return true;
 
     case MainActionConfig:
-        fm504_build_config_menu(app);
-        fm504_switch_view(app, ViewIdConfig);
+        flipper_rfid_build_config_menu(app);
+        flipper_rfid_switch_view(app, ViewIdConfig);
         return true;
 
     case MainActionModule:
-        fm504_build_module_menu(app);
-        fm504_switch_view(app, ViewIdModule);
+        flipper_rfid_build_module_menu(app);
+        flipper_rfid_switch_view(app, ViewIdModule);
         return true;
 
     case ModuleActionFm504:
-        if(fm504_reopen_driver(app, RfidModuleFm504)) {
+        if(flipper_rfid_reopen_driver(app, RfidModuleFm504)) {
             snprintf(app->status_msg, sizeof(app->status_msg), "Module: FM504");
-            fm504_persist_settings(app);
+            flipper_rfid_persist_settings(app);
         } else {
             snprintf(app->status_msg, sizeof(app->status_msg), "Error opening FM504");
         }
-        fm504_switch_view(app, ViewIdMainMenu);
+        flipper_rfid_switch_view(app, ViewIdMainMenu);
         return true;
 
     case ModuleActionRe40:
-        if(fm504_reopen_driver(app, RfidModuleRe40)) {
+        if(flipper_rfid_reopen_driver(app, RfidModuleRe40)) {
             snprintf(app->status_msg, sizeof(app->status_msg), "Module: RE40 (base)");
-            fm504_persist_settings(app);
+            flipper_rfid_persist_settings(app);
         } else {
             snprintf(app->status_msg, sizeof(app->status_msg), "Error opening RE40");
         }
-        fm504_switch_view(app, ViewIdMainMenu);
+        flipper_rfid_switch_view(app, ViewIdMainMenu);
         return true;
 
     case MainActionReadMode:
-        fm504_build_read_mode_menu(app);
-        fm504_switch_view(app, ViewIdReadMode);
+        flipper_rfid_build_read_mode_menu(app);
+        flipper_rfid_switch_view(app, ViewIdReadMode);
         return true;
 
     case MainActionTxPower:
-        fm504_build_tx_power_menu(app);
-        fm504_switch_view(app, ViewIdTxPower);
+        flipper_rfid_build_tx_power_menu(app);
+        flipper_rfid_switch_view(app, ViewIdTxPower);
         return true;
 
     case MainActionReadRate:
-        fm504_build_read_rate_menu(app);
-        fm504_switch_view(app, ViewIdReadRate);
+        flipper_rfid_build_read_rate_menu(app);
+        flipper_rfid_switch_view(app, ViewIdReadRate);
         return true;
 
     case MainActionAbout:
-        fm504_refresh_about(app);
-        fm504_switch_view(app, ViewIdAbout);
+        flipper_rfid_refresh_about(app);
+        flipper_rfid_switch_view(app, ViewIdAbout);
         return true;
 
     case ModeActionEpc:
         app->scan_mode = RfidScanModeEpc;
         app->scan_all_step = 0;
-        fm504_apply_scan_mode_to_driver(app);
-        fm504_persist_settings(app);
+        flipper_rfid_apply_scan_mode_to_driver(app);
+        flipper_rfid_persist_settings(app);
         snprintf(app->status_msg, sizeof(app->status_msg), "Read mode: EPC");
-        fm504_switch_view(app, ViewIdMainMenu);
+        flipper_rfid_switch_view(app, ViewIdMainMenu);
         return true;
 
     case ModeActionTid:
         app->scan_mode = RfidScanModeTid;
         app->scan_all_step = 0;
-        fm504_apply_scan_mode_to_driver(app);
-        fm504_persist_settings(app);
+        flipper_rfid_apply_scan_mode_to_driver(app);
+        flipper_rfid_persist_settings(app);
         snprintf(app->status_msg, sizeof(app->status_msg), "Read mode: TID");
-        fm504_switch_view(app, ViewIdMainMenu);
+        flipper_rfid_switch_view(app, ViewIdMainMenu);
         return true;
 
     case ModeActionUser:
         app->scan_mode = RfidScanModeUser;
         app->scan_all_step = 0;
-        fm504_apply_scan_mode_to_driver(app);
-        fm504_persist_settings(app);
+        flipper_rfid_apply_scan_mode_to_driver(app);
+        flipper_rfid_persist_settings(app);
         snprintf(app->status_msg, sizeof(app->status_msg), "Read mode: USER");
-        fm504_switch_view(app, ViewIdMainMenu);
+        flipper_rfid_switch_view(app, ViewIdMainMenu);
         return true;
 
     case ModeActionAll:
         app->scan_mode = RfidScanModeAll;
         app->scan_all_step = 0;
         app->scan_view_tab = 0;
-        fm504_scan_all_reset(app);
-        fm504_apply_scan_mode_to_driver(app);
-        fm504_persist_settings(app);
+        flipper_rfid_scan_all_reset(app);
+        flipper_rfid_apply_scan_mode_to_driver(app);
+        flipper_rfid_persist_settings(app);
         snprintf(app->status_msg, sizeof(app->status_msg), "Read mode: ALL");
-        fm504_switch_view(app, ViewIdMainMenu);
+        flipper_rfid_switch_view(app, ViewIdMainMenu);
         return true;
 
     case RateAction10:
-        fm504_apply_read_rate(app, 10);
-        fm504_persist_settings(app);
+        flipper_rfid_apply_read_rate(app, 10);
+        flipper_rfid_persist_settings(app);
         snprintf(app->status_msg, sizeof(app->status_msg), "Read rate: 10ms");
-        fm504_switch_view(app, ViewIdMainMenu);
+        flipper_rfid_switch_view(app, ViewIdMainMenu);
         return true;
 
     case RateAction25:
-        fm504_apply_read_rate(app, 25);
-        fm504_persist_settings(app);
+        flipper_rfid_apply_read_rate(app, 25);
+        flipper_rfid_persist_settings(app);
         snprintf(app->status_msg, sizeof(app->status_msg), "Read rate: 25ms");
-        fm504_switch_view(app, ViewIdMainMenu);
+        flipper_rfid_switch_view(app, ViewIdMainMenu);
         return true;
 
     case RateAction50:
-        fm504_apply_read_rate(app, 50);
-        fm504_persist_settings(app);
+        flipper_rfid_apply_read_rate(app, 50);
+        flipper_rfid_persist_settings(app);
         snprintf(app->status_msg, sizeof(app->status_msg), "Read rate: 50ms");
-        fm504_switch_view(app, ViewIdMainMenu);
+        flipper_rfid_switch_view(app, ViewIdMainMenu);
         return true;
 
     case RateAction100:
-        fm504_apply_read_rate(app, 100);
-        fm504_persist_settings(app);
+        flipper_rfid_apply_read_rate(app, 100);
+        flipper_rfid_persist_settings(app);
         snprintf(app->status_msg, sizeof(app->status_msg), "Read rate: 100ms");
-        fm504_switch_view(app, ViewIdMainMenu);
+        flipper_rfid_switch_view(app, ViewIdMainMenu);
         return true;
 
     case RateAction200:
-        fm504_apply_read_rate(app, 200);
-        fm504_persist_settings(app);
+        flipper_rfid_apply_read_rate(app, 200);
+        flipper_rfid_persist_settings(app);
         snprintf(app->status_msg, sizeof(app->status_msg), "Read rate: 200ms");
-        fm504_switch_view(app, ViewIdMainMenu);
+        flipper_rfid_switch_view(app, ViewIdMainMenu);
         return true;
 
     case RateAction300:
-        fm504_apply_read_rate(app, 300);
-        fm504_persist_settings(app);
+        flipper_rfid_apply_read_rate(app, 300);
+        flipper_rfid_persist_settings(app);
         snprintf(app->status_msg, sizeof(app->status_msg), "Read rate: 300ms");
-        fm504_switch_view(app, ViewIdMainMenu);
+        flipper_rfid_switch_view(app, ViewIdMainMenu);
         return true;
 
     case RateAction400:
-        fm504_apply_read_rate(app, 400);
-        fm504_persist_settings(app);
+        flipper_rfid_apply_read_rate(app, 400);
+        flipper_rfid_persist_settings(app);
         snprintf(app->status_msg, sizeof(app->status_msg), "Read rate: 400ms");
-        fm504_switch_view(app, ViewIdMainMenu);
+        flipper_rfid_switch_view(app, ViewIdMainMenu);
         return true;
 
     case RateAction500:
-        fm504_apply_read_rate(app, 500);
-        fm504_persist_settings(app);
+        flipper_rfid_apply_read_rate(app, 500);
+        flipper_rfid_persist_settings(app);
         snprintf(app->status_msg, sizeof(app->status_msg), "Read rate: 500ms");
-        fm504_switch_view(app, ViewIdMainMenu);
+        flipper_rfid_switch_view(app, ViewIdMainMenu);
         return true;
 
     case RateAction750:
-        fm504_apply_read_rate(app, 750);
-        fm504_persist_settings(app);
+        flipper_rfid_apply_read_rate(app, 750);
+        flipper_rfid_persist_settings(app);
         snprintf(app->status_msg, sizeof(app->status_msg), "Read rate: 750ms");
-        fm504_switch_view(app, ViewIdMainMenu);
+        flipper_rfid_switch_view(app, ViewIdMainMenu);
         return true;
 
     case EventScanToggle:
@@ -1561,12 +1561,12 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
             snprintf(app->scan_last_user, sizeof(app->scan_last_user), "No reads");
             app->scan_all_step = 0;
             app->scan_view_tab = 0;
-            fm504_scan_all_reset(app);
-            fm504_apply_scan_mode_to_driver(app);
+            flipper_rfid_scan_all_reset(app);
+            flipper_rfid_apply_scan_mode_to_driver(app);
             if(!rfid_driver_set_enabled(app->driver, true)) {
                 app->scan_running = false;
                 snprintf(app->status_msg, sizeof(app->status_msg), "Error EN=HIGH");
-                fm504_refresh_scan_view(app);
+                flipper_rfid_refresh_scan_view(app);
                 return true;
             }
             if(!rfid_driver_probe(app->driver, app->tx_power_db)) {
@@ -1582,7 +1582,7 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
             rfid_driver_set_enabled(app->driver, false);
             snprintf(app->status_msg, sizeof(app->status_msg), "Scan stopped");
         }
-        fm504_refresh_scan_view(app);
+        flipper_rfid_refresh_scan_view(app);
         return true;
 
     case EventScanSave:
@@ -1615,18 +1615,18 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
                 snprintf(app->scan_last_line, sizeof(app->scan_last_line), "Save error");
             }
         }
-        fm504_refresh_scan_view(app);
+        flipper_rfid_refresh_scan_view(app);
         return true;
 
     case EventScanClear:
         app->tags_count = 0;
-        fm504_scan_all_reset(app);
+        flipper_rfid_scan_all_reset(app);
         snprintf(app->status_msg, sizeof(app->status_msg), "Captures cleared");
         snprintf(app->scan_last_line, sizeof(app->scan_last_line), "No reads");
         snprintf(app->scan_last_epc, sizeof(app->scan_last_epc), "No reads");
         snprintf(app->scan_last_tid, sizeof(app->scan_last_tid), "No reads");
         snprintf(app->scan_last_user, sizeof(app->scan_last_user), "No reads");
-        fm504_refresh_scan_view(app);
+        flipper_rfid_refresh_scan_view(app);
         return true;
 
     case EventScanTagPrev:
@@ -1635,7 +1635,7 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
                 app->scan_all_selected =
                     (app->scan_all_selected == 0) ? (app->scan_all_count - 1) : (app->scan_all_selected - 1);
             }
-            fm504_refresh_scan_view(app);
+            flipper_rfid_refresh_scan_view(app);
         }
         return true;
 
@@ -1644,19 +1644,19 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
             if(app->scan_all_count > 0) {
                 app->scan_all_selected = (app->scan_all_selected + 1U) % app->scan_all_count;
             }
-            fm504_refresh_scan_view(app);
+            flipper_rfid_refresh_scan_view(app);
         }
         return true;
 
     case EventCloneSourceRead:
     case EventCloneSourceRetry:
-        if(fm504_clone_capture_source(app)) {
+        if(flipper_rfid_clone_capture_source(app)) {
             snprintf(app->status_msg, sizeof(app->status_msg), "Source captured");
-            fm504_refresh_clone_target_view(app);
-            fm504_switch_view(app, ViewIdCloneTarget);
+            flipper_rfid_refresh_clone_target_view(app);
+            flipper_rfid_switch_view(app, ViewIdCloneTarget);
         } else {
             snprintf(app->status_msg, sizeof(app->status_msg), "Source read failed");
-            fm504_refresh_clone_source_view(app);
+            flipper_rfid_refresh_clone_source_view(app);
         }
         return true;
 
@@ -1664,16 +1664,16 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
         if(app->clone_source_epc[0] == '\0') {
             snprintf(app->status_msg, sizeof(app->status_msg), "No source EPC");
             snprintf(app->clone_result_detail, sizeof(app->clone_result_detail), "No source EPC");
-            fm504_refresh_clone_source_view(app);
-            fm504_switch_view(app, ViewIdCloneSource);
+            flipper_rfid_refresh_clone_source_view(app);
+            flipper_rfid_switch_view(app, ViewIdCloneSource);
             return true;
         }
         char write_detail[48];
-        if(fm504_attempt_write_epc(app, app->clone_source_epc, write_detail, sizeof(write_detail))) {
+        if(flipper_rfid_attempt_write_epc(app, app->clone_source_epc, write_detail, sizeof(write_detail))) {
             snprintf(app->status_msg, sizeof(app->status_msg), "Clone write OK");
             snprintf(app->clone_result_detail, sizeof(app->clone_result_detail), "%s", write_detail);
             app->clone_result_ok = true;
-            fm504_vibro_write_ok(app);
+            flipper_rfid_vibro_write_ok(app);
         } else {
             snprintf(
                 app->status_msg,
@@ -1687,18 +1687,18 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
                 write_detail[0] ? write_detail : "No detail");
             app->clone_result_ok = false;
         }
-        fm504_refresh_clone_result_view(app);
-        fm504_switch_view(app, ViewIdCloneResult);
+        flipper_rfid_refresh_clone_result_view(app);
+        flipper_rfid_switch_view(app, ViewIdCloneResult);
         return true;
 
     case EventCloneToggleAccess:
         app->use_access_password = !app->use_access_password;
-        fm504_persist_settings(app);
+        flipper_rfid_persist_settings(app);
         snprintf(
             app->status_msg,
             sizeof(app->status_msg),
             app->use_access_password ? "Lock enabled for write/clone" : "Lock disabled for write/clone");
-        fm504_refresh_clone_target_view(app);
+        flipper_rfid_refresh_clone_target_view(app);
         return true;
 
     case EventCloneTargetRetry: {
@@ -1706,14 +1706,14 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
         if(app->clone_source_epc[0] == '\0') {
             snprintf(app->clone_result_detail, sizeof(app->clone_result_detail), "No source EPC");
             app->clone_result_ok = false;
-            fm504_refresh_clone_result_view(app);
+            flipper_rfid_refresh_clone_result_view(app);
             return true;
         }
-        if(fm504_attempt_write_epc(app, app->clone_source_epc, write_detail, sizeof(write_detail))) {
+        if(flipper_rfid_attempt_write_epc(app, app->clone_source_epc, write_detail, sizeof(write_detail))) {
             snprintf(app->status_msg, sizeof(app->status_msg), "Clone write OK");
             snprintf(app->clone_result_detail, sizeof(app->clone_result_detail), "%s", write_detail);
             app->clone_result_ok = true;
-            fm504_vibro_write_ok(app);
+            flipper_rfid_vibro_write_ok(app);
         } else {
             snprintf(
                 app->status_msg,
@@ -1727,34 +1727,34 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
                 write_detail[0] ? write_detail : "No detail");
             app->clone_result_ok = false;
         }
-        fm504_refresh_clone_result_view(app);
+        flipper_rfid_refresh_clone_result_view(app);
         return true;
     }
 
     case EventCloneBackToSource:
-        fm504_refresh_clone_source_view(app);
-        fm504_switch_view(app, ViewIdCloneSource);
+        flipper_rfid_refresh_clone_source_view(app);
+        flipper_rfid_switch_view(app, ViewIdCloneSource);
         return true;
 
     case EventCloneResultBack:
-        fm504_switch_view(app, ViewIdMainMenu);
+        flipper_rfid_switch_view(app, ViewIdMainMenu);
         return true;
 
     case EventProtectionRun:
         snprintf(app->protection_status, sizeof(app->protection_status), "CHECKING...");
         app->protection_epc[0] = '\0';
         snprintf(app->protection_detail, sizeof(app->protection_detail), "Reading EPC...");
-        fm504_refresh_protection_view(app);
+        flipper_rfid_refresh_protection_view(app);
         view_dispatcher_send_custom_event(app->view_dispatcher, EventProtectionDo);
         return true;
 
     case EventProtectionDo:
-        fm504_run_protection_check(app);
-        fm504_refresh_protection_view(app);
+        flipper_rfid_run_protection_check(app);
+        flipper_rfid_refresh_protection_view(app);
         return true;
 
     case EventProtectionBack:
-        fm504_switch_view(app, ViewIdMainMenu);
+        flipper_rfid_switch_view(app, ViewIdMainMenu);
         return true;
 
     case EventScanTick:
@@ -1763,37 +1763,37 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
                 RfidTagRead epc_tag = {0};
                 rfid_driver_set_mode(app->driver, RfidScanModeEpc);
                 if(rfid_driver_scan_once(app->driver, &epc_tag) && epc_tag.primary_hex[0] != '\0') {
-                    bool is_new = fm504_add_or_update_tag(app, &epc_tag);
-                    fm504_scan_all_record(app, "EPC", epc_tag.primary_hex);
+                    bool is_new = flipper_rfid_add_or_update_tag(app, &epc_tag);
+                    flipper_rfid_scan_all_record(app, "EPC", epc_tag.primary_hex);
                     snprintf(app->scan_last_epc, sizeof(app->scan_last_epc), "%s", epc_tag.primary_hex);
                     snprintf(app->scan_last_line, sizeof(app->scan_last_line), "%s", epc_tag.primary_hex);
-                    if(is_new) fm504_vibro_read(app);
+                    if(is_new) flipper_rfid_vibro_read(app);
 
                     RfidTagRead tid_tag = {0};
                     rfid_driver_set_mode(app->driver, RfidScanModeTid);
                     if(rfid_driver_scan_once(app->driver, &tid_tag) && tid_tag.primary_hex[0] != '\0') {
-                        fm504_scan_all_record(app, "TID", tid_tag.primary_hex);
+                        flipper_rfid_scan_all_record(app, "TID", tid_tag.primary_hex);
                         snprintf(app->scan_last_tid, sizeof(app->scan_last_tid), "%s", tid_tag.primary_hex);
                     }
 
                     RfidTagRead user_tag = {0};
                     rfid_driver_set_mode(app->driver, RfidScanModeUser);
                     if(rfid_driver_scan_once(app->driver, &user_tag) && user_tag.primary_hex[0] != '\0') {
-                        fm504_scan_all_record(app, "USER", user_tag.primary_hex);
+                        flipper_rfid_scan_all_record(app, "USER", user_tag.primary_hex);
                         snprintf(app->scan_last_user, sizeof(app->scan_last_user), "%s", user_tag.primary_hex);
                     }
 
                     snprintf(app->status_msg, sizeof(app->status_msg), "ALL: %s", epc_tag.primary_hex);
                 }
                 rfid_driver_set_mode(app->driver, RfidScanModeEpc);
-                if(app->current_view == ViewIdScan) fm504_refresh_scan_view(app);
+                if(app->current_view == ViewIdScan) flipper_rfid_refresh_scan_view(app);
             } else {
-                if(app->scan_mode == RfidScanModeUser) fm504_apply_scan_mode_to_driver(app);
+                if(app->scan_mode == RfidScanModeUser) flipper_rfid_apply_scan_mode_to_driver(app);
                 RfidTagRead tag = {0};
                 if(rfid_driver_scan_once(app->driver, &tag)) {
-                    bool is_new = fm504_add_or_update_tag(app, &tag);
-                    if(is_new) fm504_vibro_read(app);
-                    const char* read_label = fm504_scan_mode_name(app->scan_mode);
+                    bool is_new = flipper_rfid_add_or_update_tag(app, &tag);
+                    if(is_new) flipper_rfid_vibro_read(app);
+                    const char* read_label = flipper_rfid_scan_mode_name(app->scan_mode);
                     snprintf(app->status_msg, sizeof(app->status_msg), "%s: %s", read_label, tag.primary_hex);
                     snprintf(app->scan_last_line, sizeof(app->scan_last_line), "%s", tag.primary_hex);
                     if(strcmp(read_label, "EPC") == 0) {
@@ -1803,7 +1803,7 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
                     } else if(strcmp(read_label, "USER") == 0) {
                         snprintf(app->scan_last_user, sizeof(app->scan_last_user), "%s", tag.primary_hex);
                     }
-                    if(app->current_view == ViewIdScan) fm504_refresh_scan_view(app);
+                    if(app->current_view == ViewIdScan) flipper_rfid_refresh_scan_view(app);
                 }
             }
         }
@@ -1818,8 +1818,8 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
             app->last_write_epc[sizeof(app->last_write_epc) - 1] = '\0';
             snprintf(app->last_write_detail, sizeof(app->last_write_detail), "Invalid EPC format");
             app->last_write_ok = false;
-            fm504_refresh_write_result_view(app);
-            fm504_switch_view(app, ViewIdWriteResult);
+            flipper_rfid_refresh_write_result_view(app);
+            flipper_rfid_switch_view(app, ViewIdWriteResult);
             return true;
         } else {
             snprintf(app->last_write_epc, sizeof(app->last_write_epc), "%s", normalized);
@@ -1829,52 +1829,52 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
                 "Lock: %s (%s)",
                 app->use_access_password ? "ON" : "OFF",
                 app->use_access_password ? app->access_password : "no pwd");
-            fm504_refresh_write_confirm_view(app);
-            fm504_switch_view(app, ViewIdWriteConfirm);
+            flipper_rfid_refresh_write_confirm_view(app);
+            flipper_rfid_switch_view(app, ViewIdWriteConfirm);
             return true;
         }
     }
 
     case EventWriteUserCommit: {
-        fm504_uppercase_hex(app->write_user_buffer);
+        flipper_rfid_uppercase_hex(app->write_user_buffer);
         app->last_write_is_user = true;
-        if(!fm504_is_even_hex_max64(app->write_user_buffer)) {
+        if(!flipper_rfid_is_even_hex_max64(app->write_user_buffer)) {
             snprintf(app->status_msg, sizeof(app->status_msg), "Invalid USER (HEX even, <=64)");
             snprintf(app->last_write_epc, sizeof(app->last_write_epc), "USER");
             snprintf(app->last_write_user, sizeof(app->last_write_user), "%s", app->write_user_buffer);
             snprintf(app->last_write_detail, sizeof(app->last_write_detail), "Invalid USER format");
             app->last_write_ok = false;
-            fm504_refresh_write_result_view(app);
-            fm504_switch_view(app, ViewIdWriteResult);
+            flipper_rfid_refresh_write_result_view(app);
+            flipper_rfid_switch_view(app, ViewIdWriteResult);
             return true;
         }
 
         char detail[64];
         snprintf(app->last_write_user, sizeof(app->last_write_user), "%s", app->write_user_buffer);
-        if(fm504_attempt_write_user(app, app->write_user_buffer, 0, detail, sizeof(detail))) {
+        if(flipper_rfid_attempt_write_user(app, app->write_user_buffer, 0, detail, sizeof(detail))) {
             snprintf(app->status_msg, sizeof(app->status_msg), "USER written");
             snprintf(app->last_write_epc, sizeof(app->last_write_epc), "USER");
             snprintf(app->last_write_detail, sizeof(app->last_write_detail), "%s", detail);
             app->last_write_ok = true;
-            fm504_vibro_write_ok(app);
+            flipper_rfid_vibro_write_ok(app);
         } else {
             snprintf(app->status_msg, sizeof(app->status_msg), "Write USER failed: %.44s", detail);
             snprintf(app->last_write_epc, sizeof(app->last_write_epc), "USER");
             snprintf(app->last_write_detail, sizeof(app->last_write_detail), "%s", detail);
             app->last_write_ok = false;
         }
-        fm504_refresh_write_result_view(app);
-        fm504_switch_view(app, ViewIdWriteResult);
+        flipper_rfid_refresh_write_result_view(app);
+        flipper_rfid_switch_view(app, ViewIdWriteResult);
         return true;
     }
 
     case EventWriteDo: {
         char write_detail[64];
-        if(fm504_attempt_write_epc(app, app->last_write_epc, write_detail, sizeof(write_detail))) {
+        if(flipper_rfid_attempt_write_epc(app, app->last_write_epc, write_detail, sizeof(write_detail))) {
             snprintf(app->status_msg, sizeof(app->status_msg), "Tag written: %s", app->last_write_epc);
             snprintf(app->last_write_detail, sizeof(app->last_write_detail), "%s", write_detail);
             app->last_write_ok = true;
-            fm504_vibro_write_ok(app);
+            flipper_rfid_vibro_write_ok(app);
             if(app->selected_tag_idx < app->tags_count) {
                 strncpy(
                     app->tags[app->selected_tag_idx].primary_hex,
@@ -1896,32 +1896,32 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
                 write_detail[0] ? write_detail : "No detail");
             app->last_write_ok = false;
         }
-        fm504_refresh_write_result_view(app);
-        fm504_switch_view(app, ViewIdWriteResult);
+        flipper_rfid_refresh_write_result_view(app);
+        flipper_rfid_switch_view(app, ViewIdWriteResult);
         return true;
     }
 
     case EventWriteToggleAccess:
         app->use_access_password = !app->use_access_password;
-        fm504_persist_settings(app);
-        fm504_refresh_write_confirm_view(app);
+        flipper_rfid_persist_settings(app);
+        flipper_rfid_refresh_write_confirm_view(app);
         return true;
 
     case EventWriteConfirmBack:
-        fm504_switch_view(app, ViewIdMainMenu);
+        flipper_rfid_switch_view(app, ViewIdMainMenu);
         return true;
 
     case EventAccessPwdCommit:
-        fm504_uppercase_str(app->access_input_buffer);
-        if(!fm504_is_hex8(app->access_input_buffer)) {
+        flipper_rfid_uppercase_str(app->access_input_buffer);
+        if(!flipper_rfid_is_hex8(app->access_input_buffer)) {
             snprintf(app->status_msg, sizeof(app->status_msg), "Invalid password (exactly 8 HEX)");
         } else {
             strncpy(app->access_password, app->access_input_buffer, sizeof(app->access_password) - 1);
             app->access_password[sizeof(app->access_password) - 1] = '\0';
-            fm504_persist_settings(app);
+            flipper_rfid_persist_settings(app);
             snprintf(app->status_msg, sizeof(app->status_msg), "Access password saved: %s", app->access_password);
         }
-        fm504_switch_view(app, ViewIdMainMenu);
+        flipper_rfid_switch_view(app, ViewIdMainMenu);
         return true;
 
     case EventWriteRetry: {
@@ -1930,12 +1930,12 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
             if(app->last_write_user[0] == '\0') {
                 snprintf(app->last_write_detail, sizeof(app->last_write_detail), "No USER to retry");
                 app->last_write_ok = false;
-            } else if(fm504_attempt_write_user(
+            } else if(flipper_rfid_attempt_write_user(
                           app, app->last_write_user, 0, write_detail, sizeof(write_detail))) {
                 snprintf(app->status_msg, sizeof(app->status_msg), "USER written");
                 snprintf(app->last_write_detail, sizeof(app->last_write_detail), "%s", write_detail);
                 app->last_write_ok = true;
-                fm504_vibro_write_ok(app);
+                flipper_rfid_vibro_write_ok(app);
             } else {
                 snprintf(
                     app->status_msg,
@@ -1952,11 +1952,11 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
         } else if(app->last_write_epc[0] == '\0') {
             snprintf(app->last_write_detail, sizeof(app->last_write_detail), "No EPC to retry");
             app->last_write_ok = false;
-        } else if(fm504_attempt_write_epc(app, app->last_write_epc, write_detail, sizeof(write_detail))) {
+        } else if(flipper_rfid_attempt_write_epc(app, app->last_write_epc, write_detail, sizeof(write_detail))) {
             snprintf(app->status_msg, sizeof(app->status_msg), "Tag written: %s", app->last_write_epc);
             snprintf(app->last_write_detail, sizeof(app->last_write_detail), "%s", write_detail);
             app->last_write_ok = true;
-            fm504_vibro_write_ok(app);
+            flipper_rfid_vibro_write_ok(app);
         } else {
             snprintf(
                 app->status_msg,
@@ -1970,36 +1970,36 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
                 write_detail[0] ? write_detail : "No detail");
             app->last_write_ok = false;
         }
-        fm504_refresh_write_result_view(app);
+        flipper_rfid_refresh_write_result_view(app);
         return true;
     }
 
     case EventSavedTagBack:
-        fm504_build_saved_tags_menu(app);
-        fm504_switch_view(app, ViewIdSavedTags);
+        flipper_rfid_build_saved_tags_menu(app);
+        flipper_rfid_switch_view(app, ViewIdSavedTags);
         return true;
 
     case EventSavedTagDelete:
         if(app->saved_selected_idx < app->saved_tags_count) {
             (void)storage_saved_tags_delete(app->saved_selected_idx);
-            fm504_saved_tags_load(app);
+            flipper_rfid_saved_tags_load(app);
             if(app->saved_selected_idx >= app->saved_tags_count && app->saved_tags_count > 0) {
                 app->saved_selected_idx = app->saved_tags_count - 1;
             }
         }
-        fm504_build_saved_tags_menu(app);
-        fm504_switch_view(app, ViewIdSavedTags);
+        flipper_rfid_build_saved_tags_menu(app);
+        flipper_rfid_switch_view(app, ViewIdSavedTags);
         return true;
 
     case EventSavedTagClearAll:
         (void)storage_saved_tags_clear();
-        fm504_saved_tags_load(app);
-        fm504_build_saved_tags_menu(app);
-        fm504_switch_view(app, ViewIdSavedTags);
+        flipper_rfid_saved_tags_load(app);
+        flipper_rfid_build_saved_tags_menu(app);
+        flipper_rfid_switch_view(app, ViewIdSavedTags);
         return true;
 
     case EventWriteBack:
-        fm504_switch_view(app, ViewIdMainMenu);
+        flipper_rfid_switch_view(app, ViewIdMainMenu);
         return true;
 
     default:
@@ -2007,10 +2007,10 @@ static bool fm504_custom_event_callback(void* context, uint32_t event) {
     }
 }
 
-static Fm504App* fm504_app_alloc(void) {
-    Fm504App* app = malloc(sizeof(Fm504App));
+static FlipperRfidApp* flipper_rfid_app_alloc(void) {
+    FlipperRfidApp* app = malloc(sizeof(FlipperRfidApp));
     if(!app) return NULL;
-    memset(app, 0, sizeof(Fm504App));
+    memset(app, 0, sizeof(FlipperRfidApp));
 
     app->current_module = RfidModuleFm504;
     app->scan_mode = RfidScanModeEpc;
@@ -2088,7 +2088,7 @@ static Fm504App* fm504_app_alloc(void) {
     app->tx_power_menu = submenu_alloc();
     app->read_rate_menu = submenu_alloc();
     app->about_widget = widget_alloc();
-    app->scan_timer = furi_timer_alloc(fm504_scan_timer_callback, FuriTimerTypePeriodic, app);
+    app->scan_timer = furi_timer_alloc(flipper_rfid_scan_timer_callback, FuriTimerTypePeriodic, app);
     app->gui = furi_record_open(RECORD_GUI);
     app->notification = furi_record_open(RECORD_NOTIFICATION);
 
@@ -2100,43 +2100,43 @@ static Fm504App* fm504_app_alloc(void) {
        !app->module_menu ||
        !app->read_mode_menu || !app->tx_power_menu || !app->read_rate_menu || !app->about_widget ||
        !app->scan_timer || !app->gui || !app->notification) {
-        fm504_app_free(app);
+        flipper_rfid_app_free(app);
         return NULL;
     }
 
-    view_dispatcher_set_custom_event_callback(app->view_dispatcher, fm504_custom_event_callback);
+    view_dispatcher_set_custom_event_callback(app->view_dispatcher, flipper_rfid_custom_event_callback);
     view_dispatcher_set_event_callback_context(app->view_dispatcher, app);
 
     submenu_set_header(app->main_menu, "FlippeRFID");
-    submenu_add_item(app->main_menu, "Scan", MainActionScan, fm504_submenu_event, app);
-    submenu_add_item(app->main_menu, "Write Tag", MainActionWriteTag, fm504_submenu_event, app);
-    submenu_add_item(app->main_menu, "Write USER", MainActionWriteUser, fm504_submenu_event, app);
-    submenu_add_item(app->main_menu, "Saved Tags", MainActionSavedTags, fm504_submenu_event, app);
-    submenu_add_item(app->main_menu, "Clone", MainActionClone, fm504_submenu_event, app);
+    submenu_add_item(app->main_menu, "Scan", MainActionScan, flipper_rfid_submenu_event, app);
+    submenu_add_item(app->main_menu, "Write Tag", MainActionWriteTag, flipper_rfid_submenu_event, app);
+    submenu_add_item(app->main_menu, "Write USER", MainActionWriteUser, flipper_rfid_submenu_event, app);
+    submenu_add_item(app->main_menu, "Saved Tags", MainActionSavedTags, flipper_rfid_submenu_event, app);
+    submenu_add_item(app->main_menu, "Clone", MainActionClone, flipper_rfid_submenu_event, app);
     submenu_add_item(
-        app->main_menu, "Check Protection", MainActionCheckProtection, fm504_submenu_event, app);
-    submenu_add_item(app->main_menu, "Config", MainActionConfig, fm504_submenu_event, app);
-    submenu_add_item(app->main_menu, "About", MainActionAbout, fm504_submenu_event, app);
+        app->main_menu, "Check Protection", MainActionCheckProtection, flipper_rfid_submenu_event, app);
+    submenu_add_item(app->main_menu, "Config", MainActionConfig, flipper_rfid_submenu_event, app);
+    submenu_add_item(app->main_menu, "About", MainActionAbout, flipper_rfid_submenu_event, app);
 
-    view_set_previous_callback(submenu_get_view(app->main_menu), fm504_prev_exit_callback);
-    view_set_previous_callback(submenu_get_view(app->config_menu), fm504_prev_to_main_callback);
-    view_set_previous_callback(widget_get_view(app->scan_widget), fm504_prev_to_main_callback);
-    view_set_previous_callback(submenu_get_view(app->write_select_menu), fm504_prev_to_main_callback);
-    view_set_previous_callback(submenu_get_view(app->saved_tags_menu), fm504_prev_to_main_callback);
-    view_set_previous_callback(text_input_get_view(app->write_input), fm504_prev_to_main_callback);
-    view_set_previous_callback(text_input_get_view(app->access_input), fm504_prev_to_main_callback);
-    view_set_previous_callback(widget_get_view(app->write_confirm_widget), fm504_prev_to_main_callback);
-    view_set_previous_callback(widget_get_view(app->write_result_widget), fm504_prev_to_main_callback);
-    view_set_previous_callback(widget_get_view(app->saved_tag_widget), fm504_prev_to_main_callback);
-    view_set_previous_callback(widget_get_view(app->clone_source_widget), fm504_prev_to_main_callback);
-    view_set_previous_callback(widget_get_view(app->clone_target_widget), fm504_prev_to_main_callback);
-    view_set_previous_callback(widget_get_view(app->clone_result_widget), fm504_prev_to_main_callback);
-    view_set_previous_callback(widget_get_view(app->protection_widget), fm504_prev_to_main_callback);
-    view_set_previous_callback(submenu_get_view(app->module_menu), fm504_prev_to_main_callback);
-    view_set_previous_callback(submenu_get_view(app->read_mode_menu), fm504_prev_to_main_callback);
-    view_set_previous_callback(submenu_get_view(app->tx_power_menu), fm504_prev_to_main_callback);
-    view_set_previous_callback(submenu_get_view(app->read_rate_menu), fm504_prev_to_main_callback);
-    view_set_previous_callback(widget_get_view(app->about_widget), fm504_prev_to_main_callback);
+    view_set_previous_callback(submenu_get_view(app->main_menu), flipper_rfid_prev_exit_callback);
+    view_set_previous_callback(submenu_get_view(app->config_menu), flipper_rfid_prev_to_main_callback);
+    view_set_previous_callback(widget_get_view(app->scan_widget), flipper_rfid_prev_to_main_callback);
+    view_set_previous_callback(submenu_get_view(app->write_select_menu), flipper_rfid_prev_to_main_callback);
+    view_set_previous_callback(submenu_get_view(app->saved_tags_menu), flipper_rfid_prev_to_main_callback);
+    view_set_previous_callback(text_input_get_view(app->write_input), flipper_rfid_prev_to_main_callback);
+    view_set_previous_callback(text_input_get_view(app->access_input), flipper_rfid_prev_to_main_callback);
+    view_set_previous_callback(widget_get_view(app->write_confirm_widget), flipper_rfid_prev_to_main_callback);
+    view_set_previous_callback(widget_get_view(app->write_result_widget), flipper_rfid_prev_to_main_callback);
+    view_set_previous_callback(widget_get_view(app->saved_tag_widget), flipper_rfid_prev_to_main_callback);
+    view_set_previous_callback(widget_get_view(app->clone_source_widget), flipper_rfid_prev_to_main_callback);
+    view_set_previous_callback(widget_get_view(app->clone_target_widget), flipper_rfid_prev_to_main_callback);
+    view_set_previous_callback(widget_get_view(app->clone_result_widget), flipper_rfid_prev_to_main_callback);
+    view_set_previous_callback(widget_get_view(app->protection_widget), flipper_rfid_prev_to_main_callback);
+    view_set_previous_callback(submenu_get_view(app->module_menu), flipper_rfid_prev_to_main_callback);
+    view_set_previous_callback(submenu_get_view(app->read_mode_menu), flipper_rfid_prev_to_main_callback);
+    view_set_previous_callback(submenu_get_view(app->tx_power_menu), flipper_rfid_prev_to_main_callback);
+    view_set_previous_callback(submenu_get_view(app->read_rate_menu), flipper_rfid_prev_to_main_callback);
+    view_set_previous_callback(widget_get_view(app->about_widget), flipper_rfid_prev_to_main_callback);
 
     view_dispatcher_add_view(app->view_dispatcher, ViewIdMainMenu, submenu_get_view(app->main_menu));
     view_dispatcher_add_view(app->view_dispatcher, ViewIdConfig, submenu_get_view(app->config_menu));
@@ -2162,11 +2162,11 @@ static Fm504App* fm504_app_alloc(void) {
     view_dispatcher_add_view(app->view_dispatcher, ViewIdAbout, widget_get_view(app->about_widget));
 
     view_dispatcher_attach_to_gui(app->view_dispatcher, app->gui, ViewDispatcherTypeFullscreen);
-    fm504_switch_view(app, ViewIdMainMenu);
+    flipper_rfid_switch_view(app, ViewIdMainMenu);
     return app;
 }
 
-static void fm504_app_free(Fm504App* app) {
+static void flipper_rfid_app_free(FlipperRfidApp* app) {
     if(!app) return;
     app->closing = true;
     app->scan_running = false;
@@ -2225,13 +2225,13 @@ static void fm504_app_free(Fm504App* app) {
 int32_t flipper_rfid_app(void* p) {
     UNUSED(p);
 
-    Fm504App* app = fm504_app_alloc();
+    FlipperRfidApp* app = flipper_rfid_app_alloc();
     if(!app) {
         FURI_LOG_E(TAG, "App alloc failed");
         return -1;
     }
 
     view_dispatcher_run(app->view_dispatcher);
-    fm504_app_free(app);
+    flipper_rfid_app_free(app);
     return 0;
 }

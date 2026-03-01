@@ -17,11 +17,11 @@ App externa para Flipper Zero con:
 - `uhf_uart.*`: transporte UART para lectores UHF por serial
 - `uhf_protocol.*`: validacion/parsing/comandos EPC Gen2 (familia FM504)
 - `uhf_reader.*`: implementacion de lectura/escritura sobre protocolo UHF
-- `storage_tags.*`: persistencia en `/ext/apps_data/fm504_rfid/tags.txt`
+- `storage_tags.*`: persistencia en `/ext/apps_data/flipperrfid/` (con fallback de lectura a `/ext/apps_data/fm504_rfid/`)
 
 ## Arquitectura escalable
 
-- La UI no llama directo a `fm504_*`.
+- La UI no llama directo a `uhf_*`.
 - La UI usa `rfid_driver_*` (capa comun).
 - La app permite seleccionar modulo desde UI (`FM504` o `RE40`).
 - Para agregar otro lector, implementa su bloque en `rfid_driver.c` y no hace falta tocar pantallas.
@@ -73,8 +73,8 @@ Actualmente en la app:
 
 Debes completar estas funciones según el manual del FM-504:
 
-1. validar `fm504_uart_open`, `fm504_uart_send`, `fm504_uart_read` con tu cableado real
-2. validar `fm504_protocol_make_write_epc_cmd` contra traza real del FM504
+1. validar `uhf_uart_open`, `uhf_uart_send`, `uhf_uart_read` con tu cableado real
+2. validar `uhf_protocol_make_write_epc_cmd` contra traza real del FM504
 3. si usas `U` multi-tag, agregar parser de lista por lineas
 
 ## Flujo en la app

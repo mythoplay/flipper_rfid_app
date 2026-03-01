@@ -13,8 +13,8 @@
 #include <string.h>
 
 typedef struct {
-    Fm504Uart* uart;
-    Fm504ScanMode mode;
+    UhfUart* uart;
+    UhfScanMode mode;
     const GpioPin* en_gpio;
     bool enabled;
 } DriverFm504;
@@ -49,24 +49,24 @@ bool rfid_driver_normalize_epc(const char* in, char* out, size_t out_cap) {
     return j > 0 && (j % 2 == 0) && (j <= 32);
 }
 
-static bool fm504_open_impl(void** out_impl, const RfidDriverConfig* cfg) {
+static bool driver_fm504_open_impl(void** out_impl, const RfidDriverConfig* cfg) {
     if(!out_impl || !cfg) return false;
 
     DriverFm504* impl = malloc(sizeof(DriverFm504));
     if(!impl) return false;
     memset(impl, 0, sizeof(DriverFm504));
 
-    if(!fm504_uart_open(&impl->uart, cfg->baudrate)) {
+    if(!uhf_uart_open(&impl->uart, cfg->baudrate)) {
         free(impl);
         return false;
     }
 
     if(cfg->scan_mode == RfidScanModeTid) {
-        impl->mode = Fm504ScanModeTid;
+        impl->mode = UhfScanModeTid;
     } else if(cfg->scan_mode == RfidScanModeUser) {
-        impl->mode = Fm504ScanModeUser;
+        impl->mode = UhfScanModeUser;
     } else {
-        impl->mode = Fm504ScanModeEpc;
+        impl->mode = UhfScanModeEpc;
     }
     impl->en_gpio = &gpio_ext_pa7;
     impl->enabled = false;
@@ -78,11 +78,11 @@ static bool fm504_open_impl(void** out_impl, const RfidDriverConfig* cfg) {
     return true;
 }
 
-static void fm504_close_impl(void* impl_ptr) {
+static void driver_fm504_close_impl(void* impl_ptr) {
     if(!impl_ptr) return;
     DriverFm504* impl = impl_ptr;
     if(impl->en_gpio) furi_hal_gpio_write(impl->en_gpio, false);
-    fm504_uart_close(impl->uart);
+    uhf_uart_close(impl->uart);
     free(impl);
 }
 
@@ -113,7 +113,7 @@ bool rfid_driver_open(RfidDriver** out_driver, const RfidDriverConfig* cfg) {
     bool ok = false;
     switch(cfg->module) {
     case RfidModuleFm504:
-        ok = fm504_open_impl(&driver->impl, cfg);
+        ok = driver_fm504_open_impl(&driver->impl, cfg);
         break;
     case RfidModuleRe40:
         ok = re40_open_impl(&driver->impl, cfg);
@@ -137,7 +137,7 @@ void rfid_driver_close(RfidDriver* driver) {
 
     switch(driver->module) {
     case RfidModuleFm504:
-        fm504_close_impl(driver->impl);
+        driver_fm504_close_impl(driver->impl);
         break;
     case RfidModuleRe40:
         re40_close_impl(driver->impl);
@@ -156,11 +156,11 @@ bool rfid_driver_set_mode(RfidDriver* driver, RfidScanMode mode) {
     case RfidModuleFm504: {
         DriverFm504* impl = driver->impl;
         if(mode == RfidScanModeTid) {
-            impl->mode = Fm504ScanModeTid;
+            impl->mode = UhfScanModeTid;
         } else if(mode == RfidScanModeUser) {
-            impl->mode = Fm504ScanModeUser;
+            impl->mode = UhfScanModeUser;
         } else {
-            impl->mode = Fm504ScanModeEpc;
+            impl->mode = UhfScanModeEpc;
         }
         return true;
     }
@@ -180,7 +180,7 @@ bool rfid_driver_set_tx_power(RfidDriver* driver, int8_t dbm) {
     switch(driver->module) {
     case RfidModuleFm504: {
         DriverFm504* impl = driver->impl;
-        return fm504_reader_set_tx_power(impl->uart, dbm);
+        return uhf_reader_set_tx_power(impl->uart, dbm);
     }
     case RfidModuleRe40:
         return false;
@@ -221,7 +221,7 @@ bool rfid_driver_probe(RfidDriver* driver, int8_t tx_power_dbm) {
 
         bool ok = false;
         for(size_t i = 0; i < 3; i++) {
-            if(fm504_reader_set_tx_power(impl->uart, tx_power_dbm)) {
+            if(uhf_reader_set_tx_power(impl->uart, tx_power_dbm)) {
                 ok = true;
                 break;
             }
@@ -247,8 +247,8 @@ bool rfid_driver_scan_once(RfidDriver* driver, RfidTagRead* out) {
     case RfidModuleFm504: {
         DriverFm504* impl = driver->impl;
         if(!impl->enabled) return false;
-        Fm504InventoryResult tmp = {0};
-        if(!fm504_reader_inventory_once(impl->uart, impl->mode, &tmp)) return false;
+        UhfInventoryResult tmp = {0};
+        if(!uhf_reader_inventory_once(impl->uart, impl->mode, &tmp)) return false;
 
         strncpy(out->primary_hex, tmp.epc_hex, sizeof(out->primary_hex) - 1);
         out->primary_hex[sizeof(out->primary_hex) - 1] = '\0';
@@ -279,7 +279,7 @@ bool rfid_driver_write_epc_ex(
         if(!was_enabled) {
             if(!rfid_driver_set_enabled(driver, true)) return false;
         }
-        bool ok = fm504_reader_write_epc_ex(impl->uart, epc_hex, detail, detail_cap);
+        bool ok = uhf_reader_write_epc_ex(impl->uart, epc_hex, detail, detail_cap);
         if(!was_enabled) {
             rfid_driver_set_enabled(driver, false);
         }
@@ -312,7 +312,7 @@ bool rfid_driver_write_user_ex(
         if(!was_enabled) {
             if(!rfid_driver_set_enabled(driver, true)) return false;
         }
-        bool ok = fm504_reader_write_user_ex(impl->uart, addr_words, user_hex, detail, detail_cap);
+        bool ok = uhf_reader_write_user_ex(impl->uart, addr_words, user_hex, detail, detail_cap);
         if(!was_enabled) rfid_driver_set_enabled(driver, false);
         return ok;
     }
@@ -339,7 +339,7 @@ bool rfid_driver_access_pwd(
         if(!was_enabled) {
             if(!rfid_driver_set_enabled(driver, true)) return false;
         }
-        bool ok = fm504_reader_access_pwd(impl->uart, access_pwd_hex, detail, detail_cap);
+        bool ok = uhf_reader_access_pwd(impl->uart, access_pwd_hex, detail, detail_cap);
         if(!was_enabled) rfid_driver_set_enabled(driver, false);
         return ok;
     }

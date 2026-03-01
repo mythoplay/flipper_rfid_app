@@ -12,15 +12,15 @@
 #define FM504_UART_RX_BUFFER_SIZE 512U
 #define FM504_UART_INTERBYTE_TIMEOUT_MS 10U
 
-struct Fm504Uart {
+struct UhfUart {
     uint32_t baudrate;
     FuriHalSerialHandle* serial;
     FuriStreamBuffer* rx_stream;
 };
 
-static void fm504_uart_rx_callback(FuriHalSerialHandle* handle, FuriHalSerialRxEvent event, void* context) {
+static void uhf_uart_rx_callback(FuriHalSerialHandle* handle, FuriHalSerialRxEvent event, void* context) {
     UNUSED(handle);
-    Fm504Uart* uart = context;
+    UhfUart* uart = context;
     if(!uart || !uart->rx_stream) return;
 
     if(event & FuriHalSerialRxEventData) {
@@ -31,12 +31,12 @@ static void fm504_uart_rx_callback(FuriHalSerialHandle* handle, FuriHalSerialRxE
     }
 }
 
-bool fm504_uart_open(Fm504Uart** out_uart, uint32_t baudrate) {
+bool uhf_uart_open(UhfUart** out_uart, uint32_t baudrate) {
     furi_check(out_uart);
-    Fm504Uart* uart = malloc(sizeof(Fm504Uart));
+    UhfUart* uart = malloc(sizeof(UhfUart));
     if(!uart) return false;
 
-    memset(uart, 0, sizeof(Fm504Uart));
+    memset(uart, 0, sizeof(UhfUart));
     uart->baudrate = baudrate;
     uart->rx_stream = furi_stream_buffer_alloc(FM504_UART_RX_BUFFER_SIZE, 1);
     if(!uart->rx_stream) {
@@ -55,14 +55,14 @@ bool fm504_uart_open(Fm504Uart** out_uart, uint32_t baudrate) {
     furi_hal_serial_init(uart->serial, uart->baudrate);
     furi_hal_serial_enable_direction(uart->serial, FuriHalSerialDirectionRx);
     furi_hal_serial_enable_direction(uart->serial, FuriHalSerialDirectionTx);
-    furi_hal_serial_async_rx_start(uart->serial, fm504_uart_rx_callback, uart, true);
+    furi_hal_serial_async_rx_start(uart->serial, uhf_uart_rx_callback, uart, true);
 
     FURI_LOG_I(TAG, "UART open @ %lu bps", baudrate);
     *out_uart = uart;
     return true;
 }
 
-void fm504_uart_close(Fm504Uart* uart) {
+void uhf_uart_close(UhfUart* uart) {
     if(!uart) return;
 
     if(uart->serial) {
@@ -84,7 +84,7 @@ void fm504_uart_close(Fm504Uart* uart) {
     free(uart);
 }
 
-bool fm504_uart_send(Fm504Uart* uart, const uint8_t* data, size_t len) {
+bool uhf_uart_send(UhfUart* uart, const uint8_t* data, size_t len) {
     if(!uart || !uart->serial || !uart->rx_stream || !data || !len) return false;
 
     /* Drop stale bytes before sending a new command frame. */
@@ -96,7 +96,7 @@ bool fm504_uart_send(Fm504Uart* uart, const uint8_t* data, size_t len) {
     return true;
 }
 
-bool fm504_uart_read(Fm504Uart* uart, uint8_t* out, size_t out_cap, size_t* out_len, uint32_t timeout_ms) {
+bool uhf_uart_read(UhfUart* uart, uint8_t* out, size_t out_cap, size_t* out_len, uint32_t timeout_ms) {
     if(!uart || !uart->rx_stream || !out || !out_len || !out_cap) return false;
     *out_len = 0;
 
