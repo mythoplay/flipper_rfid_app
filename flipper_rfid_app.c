@@ -44,6 +44,7 @@ typedef enum {
     ViewIdReadRate,
     ViewIdSavedTags,
     ViewIdSavedTagDetail,
+    ViewIdEpcDecode,
     ViewIdAbout,
 } ViewId;
 
@@ -61,6 +62,7 @@ typedef enum {
     MainActionReadMode,
     MainActionTxPower,
     MainActionReadRate,
+    MainActionEpcDecode,
     MainActionAbout,
 } MainAction;
 
@@ -122,6 +124,8 @@ typedef enum {
     EventProtectionRun,
     EventProtectionDo,
     EventProtectionBack,
+    EventEpcDecodeBack,
+    EventEpcDecodeRefresh,
     EventWriteSelectBase = 2000,
     EventTxPowerBase = 3000,
     EventSavedSelectBase = 4000,
@@ -158,6 +162,7 @@ typedef struct {
     Submenu* read_mode_menu;
     Submenu* tx_power_menu;
     Submenu* read_rate_menu;
+    Widget* epc_decode_widget;
     Widget* about_widget;
     FuriTimer* scan_timer;
     RfidDriver* driver;
@@ -212,12 +217,14 @@ typedef struct {
     size_t saved_tags_count;
     size_t saved_selected_idx;
     char saved_tag_text[320];
+    char epc_decode_text[512];
 } FlipperRfidApp;
 
 static void flipper_rfid_app_free(FlipperRfidApp* app);
 static bool flipper_rfid_add_or_update_tag(FlipperRfidApp* app, const RfidTagRead* tag);
 static void flipper_rfid_persist_settings(FlipperRfidApp* app);
 static void flipper_rfid_autosave_scan_captures(FlipperRfidApp* app);
+static void flipper_rfid_refresh_epc_decode_view(FlipperRfidApp* app);
 
 static const char* flipper_rfid_scan_mode_name(RfidScanMode mode) {
     switch(mode) {
@@ -253,6 +260,103 @@ static const char* flipper_rfid_module_name(RfidModuleType module) {
 
 static const char* flipper_rfid_region_short_name(RfidRegion region) {
     return (region == RfidRegionUs) ? "US" : "EU";
+}
+
+static bool flipper_rfid_hex_byte(const char* s, uint8_t* out) {
+    if(!s || !out) return false;
+    uint8_t v = 0;
+    for(size_t i = 0; i < 2; i++) {
+        char c = s[i];
+        uint8_t n = 0;
+        if(c >= '0' && c <= '9') n = (uint8_t)(c - '0');
+        else if(c >= 'A' && c <= 'F') n = (uint8_t)(c - 'A' + 10);
+        else if(c >= 'a' && c <= 'f') n = (uint8_t)(c - 'a' + 10);
+        else return false;
+        v = (uint8_t)((v << 4) | n);
+    }
+    *out = v;
+    return true;
+}
+
+static bool flipper_rfid_is_hex_string(const char* s) {
+    if(!s || s[0] == '\0') return false;
+    for(size_t i = 0; s[i] != '\0'; i++) {
+        char c = s[i];
+        bool hex = (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f');
+        if(!hex) return false;
+    }
+    return true;
+}
+
+static const char* flipper_rfid_epc_type_from_header(uint8_t header) {
+    switch(header) {
+    case 0x2C:
+        return "GDTI-96";
+    case 0x2D:
+        return "GSRN-96";
+    case 0x2E:
+        return "GSRNP-96";
+    case 0x2F:
+        return "USDoD-96";
+    case 0x30:
+        return "SGTIN-96";
+    case 0x31:
+        return "SSCC-96";
+    case 0x32:
+        return "SGLN-96";
+    case 0x33:
+        return "GRAI-96";
+    case 0x34:
+        return "GIAI-96";
+    case 0x35:
+        return "GID-96";
+    case 0x36:
+        return "SGTIN-198";
+    case 0x37:
+        return "GRAI-170";
+    case 0x38:
+        return "GIAI-202";
+    case 0x39:
+        return "SGLN-195";
+    case 0x3A:
+        return "GDTI-113";
+    case 0x3B:
+        return "ADI-var";
+    case 0x3C:
+        return "CPI-96";
+    case 0x3D:
+        return "CPI-var";
+    case 0x3E:
+        return "GDTI-174";
+    case 0x3F:
+        return "SGCN-96";
+    case 0x40:
+        return "ITIP-110";
+    case 0x41:
+        return "ITIP-212";
+    default:
+        return "Unknown/Custom";
+    }
+}
+
+static bool flipper_rfid_pick_epc_for_decode(FlipperRfidApp* app, char* out, size_t out_cap) {
+    if(!app || !out || out_cap < 4) return false;
+
+    if(app->scan_last_epc[0] != '\0' && strcmp(app->scan_last_epc, "No reads") != 0 &&
+       flipper_rfid_is_hex_string(app->scan_last_epc)) {
+        snprintf(out, out_cap, "%s", app->scan_last_epc);
+        return true;
+    }
+
+    if(app->tags_count > 0) {
+        const char* epc = app->tags[app->tags_count - 1].primary_hex;
+        if(epc[0] != '\0' && flipper_rfid_is_hex_string(epc)) {
+            snprintf(out, out_cap, "%s", epc);
+            return true;
+        }
+    }
+
+    return false;
 }
 
 static void flipper_rfid_scan_all_reset(FlipperRfidApp* app) {
@@ -393,6 +497,21 @@ static void flipper_rfid_scan_button_callback(GuiButtonType button, InputType ty
     }
 
     view_dispatcher_send_custom_event(app->view_dispatcher, event);
+}
+
+static void flipper_rfid_epc_decode_button_callback(
+    GuiButtonType button,
+    InputType type,
+    void* context) {
+    if(type != InputTypeShort) return;
+    FlipperRfidApp* app = context;
+    if(!app || app->closing || !app->view_dispatcher) return;
+
+    if(button == GuiButtonTypeLeft) {
+        view_dispatcher_send_custom_event(app->view_dispatcher, EventEpcDecodeBack);
+    } else if(button == GuiButtonTypeCenter) {
+        view_dispatcher_send_custom_event(app->view_dispatcher, EventEpcDecodeRefresh);
+    }
 }
 
 static void flipper_rfid_write_result_button_callback(GuiButtonType button, InputType type, void* context) {
@@ -1088,6 +1207,48 @@ static void flipper_rfid_refresh_about(FlipperRfidApp* app) {
         true);
 }
 
+static void flipper_rfid_refresh_epc_decode_view(FlipperRfidApp* app) {
+    if(!app || !app->epc_decode_widget) return;
+    widget_reset(app->epc_decode_widget);
+    widget_add_string_element(app->epc_decode_widget, 2, 2, AlignLeft, AlignTop, FontPrimary, "EPC Decode");
+
+    char epc[97];
+    epc[0] = '\0';
+    if(!flipper_rfid_pick_epc_for_decode(app, epc, sizeof(epc))) {
+        snprintf(
+            app->epc_decode_text,
+            sizeof(app->epc_decode_text),
+            "No EPC available.\nScan a tag first.");
+    } else {
+        uint8_t header = 0;
+        bool header_ok = (strlen(epc) >= 2) && flipper_rfid_hex_byte(epc, &header);
+        const char* type = header_ok ? flipper_rfid_epc_type_from_header(header) : "Invalid EPC";
+        size_t bits = strlen(epc) * 4U;
+        snprintf(
+            app->epc_decode_text,
+            sizeof(app->epc_decode_text),
+            "EPC:%s\nType:%s\nHeader:0x%02X\nLength:%u bits",
+            epc,
+            type,
+            (unsigned)(header_ok ? header : 0),
+            (unsigned)bits);
+    }
+
+    widget_add_text_scroll_element(app->epc_decode_widget, 2, 16, 124, 34, app->epc_decode_text);
+    widget_add_button_element(
+        app->epc_decode_widget,
+        GuiButtonTypeLeft,
+        "Back",
+        flipper_rfid_epc_decode_button_callback,
+        app);
+    widget_add_button_element(
+        app->epc_decode_widget,
+        GuiButtonTypeCenter,
+        "Refresh",
+        flipper_rfid_epc_decode_button_callback,
+        app);
+}
+
 static bool flipper_rfid_reopen_driver(FlipperRfidApp* app, RfidModuleType module) {
     if(!app) return false;
 
@@ -1601,6 +1762,11 @@ static bool flipper_rfid_custom_event_callback(void* context, uint32_t event) {
     case MainActionReadRate:
         flipper_rfid_build_read_rate_menu(app);
         flipper_rfid_switch_view(app, ViewIdReadRate);
+        return true;
+
+    case MainActionEpcDecode:
+        flipper_rfid_refresh_epc_decode_view(app);
+        flipper_rfid_switch_view(app, ViewIdEpcDecode);
         return true;
 
     case MainActionAbout:
@@ -2169,6 +2335,14 @@ static bool flipper_rfid_custom_event_callback(void* context, uint32_t event) {
         flipper_rfid_switch_view(app, ViewIdMainMenu);
         return true;
 
+    case EventEpcDecodeRefresh:
+        flipper_rfid_refresh_epc_decode_view(app);
+        return true;
+
+    case EventEpcDecodeBack:
+        flipper_rfid_switch_view(app, ViewIdMainMenu);
+        return true;
+
     default:
         return false;
     }
@@ -2260,6 +2434,7 @@ static FlipperRfidApp* flipper_rfid_app_alloc(void) {
     app->read_mode_menu = submenu_alloc();
     app->tx_power_menu = submenu_alloc();
     app->read_rate_menu = submenu_alloc();
+    app->epc_decode_widget = widget_alloc();
     app->about_widget = widget_alloc();
     app->scan_timer = furi_timer_alloc(flipper_rfid_scan_timer_callback, FuriTimerTypePeriodic, app);
     app->gui = furi_record_open(RECORD_GUI);
@@ -2272,7 +2447,7 @@ static FlipperRfidApp* flipper_rfid_app_alloc(void) {
        !app->clone_target_widget || !app->clone_result_widget || !app->protection_widget ||
        !app->module_menu ||
        !app->region_menu || !app->read_mode_menu || !app->tx_power_menu || !app->read_rate_menu ||
-       !app->about_widget ||
+       !app->epc_decode_widget || !app->about_widget ||
        !app->scan_timer || !app->gui || !app->notification) {
         flipper_rfid_app_free(app);
         return NULL;
@@ -2290,6 +2465,7 @@ static FlipperRfidApp* flipper_rfid_app_alloc(void) {
     submenu_add_item(
         app->main_menu, "Check Protection", MainActionCheckProtection, flipper_rfid_submenu_event, app);
     submenu_add_item(app->main_menu, "Config", MainActionConfig, flipper_rfid_submenu_event, app);
+    submenu_add_item(app->main_menu, "EPC Decode", MainActionEpcDecode, flipper_rfid_submenu_event, app);
     submenu_add_item(app->main_menu, "About", MainActionAbout, flipper_rfid_submenu_event, app);
 
     view_set_previous_callback(submenu_get_view(app->main_menu), flipper_rfid_prev_exit_callback);
@@ -2311,6 +2487,7 @@ static FlipperRfidApp* flipper_rfid_app_alloc(void) {
     view_set_previous_callback(submenu_get_view(app->read_mode_menu), flipper_rfid_prev_to_main_callback);
     view_set_previous_callback(submenu_get_view(app->tx_power_menu), flipper_rfid_prev_to_main_callback);
     view_set_previous_callback(submenu_get_view(app->read_rate_menu), flipper_rfid_prev_to_main_callback);
+    view_set_previous_callback(widget_get_view(app->epc_decode_widget), flipper_rfid_prev_to_main_callback);
     view_set_previous_callback(widget_get_view(app->about_widget), flipper_rfid_prev_to_main_callback);
 
     view_dispatcher_add_view(app->view_dispatcher, ViewIdMainMenu, submenu_get_view(app->main_menu));
@@ -2335,6 +2512,7 @@ static FlipperRfidApp* flipper_rfid_app_alloc(void) {
     view_dispatcher_add_view(app->view_dispatcher, ViewIdReadMode, submenu_get_view(app->read_mode_menu));
     view_dispatcher_add_view(app->view_dispatcher, ViewIdTxPower, submenu_get_view(app->tx_power_menu));
     view_dispatcher_add_view(app->view_dispatcher, ViewIdReadRate, submenu_get_view(app->read_rate_menu));
+    view_dispatcher_add_view(app->view_dispatcher, ViewIdEpcDecode, widget_get_view(app->epc_decode_widget));
     view_dispatcher_add_view(app->view_dispatcher, ViewIdAbout, widget_get_view(app->about_widget));
 
     view_dispatcher_attach_to_gui(app->view_dispatcher, app->gui, ViewDispatcherTypeFullscreen);
@@ -2369,6 +2547,7 @@ static void flipper_rfid_app_free(FlipperRfidApp* app) {
     if(app->view_dispatcher) view_dispatcher_remove_view(app->view_dispatcher, ViewIdReadMode);
     if(app->view_dispatcher) view_dispatcher_remove_view(app->view_dispatcher, ViewIdTxPower);
     if(app->view_dispatcher) view_dispatcher_remove_view(app->view_dispatcher, ViewIdReadRate);
+    if(app->view_dispatcher) view_dispatcher_remove_view(app->view_dispatcher, ViewIdEpcDecode);
     if(app->view_dispatcher) view_dispatcher_remove_view(app->view_dispatcher, ViewIdAbout);
 
     if(app->main_menu) submenu_free(app->main_menu);
@@ -2390,6 +2569,7 @@ static void flipper_rfid_app_free(FlipperRfidApp* app) {
     if(app->read_mode_menu) submenu_free(app->read_mode_menu);
     if(app->tx_power_menu) submenu_free(app->tx_power_menu);
     if(app->read_rate_menu) submenu_free(app->read_rate_menu);
+    if(app->epc_decode_widget) widget_free(app->epc_decode_widget);
     if(app->about_widget) widget_free(app->about_widget);
     if(app->view_dispatcher) view_dispatcher_free(app->view_dispatcher);
 
