@@ -70,6 +70,7 @@ Current app capabilities:
   - `About`
 - `Config` submenu:
   - `Module`
+  - `Region` (`EU`, `US`)
   - `Read Mode` (`EPC`, `TID`, `USER`, `ALL`)
   - `TX Power` (`-2dB` to `27dB`)
   - `Read Rate (ms)`
@@ -94,6 +95,7 @@ Current app capabilities:
 
 - Current data path: `/ext/apps_data/flipperrfid/`
 - Backward compatibility: if new files are missing, data is loaded from `/ext/apps_data/fm504_rfid/`
+- Scan captures are auto-saved to `saved_tags.csv` when a new tag is detected (not on every scan tick)
 - `Saved Tags` hardened to prevent freezes from corrupted CSV:
   - line-by-line loading
   - line length limit
@@ -125,4 +127,3 @@ cd /Users/XXXXXXXX/FlipperZero_RFID/flipper_rfid_app
 ufbt build
 ufbt launch
 ```
-

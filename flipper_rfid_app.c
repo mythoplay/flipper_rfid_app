@@ -38,6 +38,7 @@ typedef enum {
     ViewIdCloneResult,
     ViewIdProtection,
     ViewIdModule,
+    ViewIdRegion,
     ViewIdReadMode,
     ViewIdTxPower,
     ViewIdReadRate,
@@ -56,6 +57,7 @@ typedef enum {
     MainActionCheckProtection,
     MainActionConfig,
     MainActionModule,
+    MainActionRegion,
     MainActionReadMode,
     MainActionTxPower,
     MainActionReadRate,
@@ -70,6 +72,11 @@ typedef enum {
     ModuleActionFm505A,
     ModuleActionRe40,
 } ModuleAction;
+
+typedef enum {
+    RegionActionEu = 180,
+    RegionActionUs,
+} RegionAction;
 
 typedef enum {
     ModeActionEpc = 200,
@@ -147,6 +154,7 @@ typedef struct {
     Widget* clone_result_widget;
     Widget* protection_widget;
     Submenu* module_menu;
+    Submenu* region_menu;
     Submenu* read_mode_menu;
     Submenu* tx_power_menu;
     Submenu* read_rate_menu;
@@ -157,7 +165,9 @@ typedef struct {
 
     bool closing;
     bool scan_running;
+    bool scan_tick_pending;
     RfidModuleType current_module;
+    RfidRegion region;
     RfidScanMode scan_mode;
     uint8_t scan_all_step;
     int8_t tx_power_db;
@@ -207,6 +217,7 @@ typedef struct {
 static void flipper_rfid_app_free(FlipperRfidApp* app);
 static bool flipper_rfid_add_or_update_tag(FlipperRfidApp* app, const RfidTagRead* tag);
 static void flipper_rfid_persist_settings(FlipperRfidApp* app);
+static void flipper_rfid_autosave_scan_captures(FlipperRfidApp* app);
 
 static const char* flipper_rfid_scan_mode_name(RfidScanMode mode) {
     switch(mode) {
@@ -238,6 +249,10 @@ static const char* flipper_rfid_module_name(RfidModuleType module) {
     default:
         return "Zebra RE40";
     }
+}
+
+static const char* flipper_rfid_region_short_name(RfidRegion region) {
+    return (region == RfidRegionUs) ? "US" : "EU";
 }
 
 static void flipper_rfid_scan_all_reset(FlipperRfidApp* app) {
@@ -298,6 +313,28 @@ static void flipper_rfid_scan_all_build_preview(const FlipperRfidApp* app, char*
         (e->user[0] != '\0') ? e->user : "No USER");
 }
 
+static void flipper_rfid_autosave_scan_captures(FlipperRfidApp* app) {
+    if(!app) return;
+
+    if(app->scan_mode == RfidScanModeAll) {
+        size_t n = (app->scan_all_count < MAX_TAGS) ? app->scan_all_count : MAX_TAGS;
+        for(size_t i = 0; i < n; i++) {
+            snprintf(app->saved_tags[i].epc, sizeof(app->saved_tags[i].epc), "%s", app->scan_all_entries[i].epc);
+            snprintf(app->saved_tags[i].tid, sizeof(app->saved_tags[i].tid), "%s", app->scan_all_entries[i].tid);
+            snprintf(app->saved_tags[i].user, sizeof(app->saved_tags[i].user), "%s", app->scan_all_entries[i].user);
+        }
+        if(n > 0) (void)storage_saved_tags_save(app->saved_tags, n);
+    } else {
+        size_t n = (app->tags_count < MAX_TAGS) ? app->tags_count : MAX_TAGS;
+        for(size_t i = 0; i < n; i++) {
+            snprintf(app->saved_tags[i].epc, sizeof(app->saved_tags[i].epc), "%s", app->tags[i].primary_hex);
+            app->saved_tags[i].tid[0] = '\0';
+            app->saved_tags[i].user[0] = '\0';
+        }
+        if(n > 0) (void)storage_saved_tags_save(app->saved_tags, n);
+    }
+}
+
 static RfidScanMode flipper_rfid_effective_driver_mode(RfidScanMode mode, uint8_t all_step) {
     if(mode == RfidScanModeTid) return RfidScanModeTid;
     if(mode == RfidScanModeUser) return RfidScanModeUser;
@@ -318,6 +355,7 @@ static void flipper_rfid_persist_settings(FlipperRfidApp* app) {
     if(!app) return;
     RfidAppSettings settings = {
         .module = app->current_module,
+        .region = app->region,
         .scan_mode = app->scan_mode,
         .tx_power_db = app->tx_power_db,
         .read_rate_ms = app->read_rate_ms,
@@ -980,7 +1018,8 @@ static void flipper_rfid_refresh_scan_view(FlipperRfidApp* app) {
         snprintf(
             app->scan_mode_line,
             sizeof(app->scan_mode_line),
-            "Scan > ALL %ddB %ums",
+            "Scan > ALL %s %ddB %ums",
+            flipper_rfid_region_short_name(app->region),
             app->tx_power_db,
             app->read_rate_ms);
         flipper_rfid_scan_all_build_preview(app, app->scan_preview_line, sizeof(app->scan_preview_line));
@@ -998,8 +1037,9 @@ static void flipper_rfid_refresh_scan_view(FlipperRfidApp* app) {
         snprintf(
             app->scan_mode_line,
             sizeof(app->scan_mode_line),
-            "Scan > %s %ddB %ums",
+            "Scan > %s %s %ddB %ums",
             flipper_rfid_scan_mode_name(app->scan_mode),
+            flipper_rfid_region_short_name(app->region),
             app->tx_power_db,
             app->read_rate_ms);
         snprintf(qty_line, sizeof(qty_line), "Qty: %u", (unsigned)app->tags_count);
@@ -1128,6 +1168,8 @@ static void flipper_rfid_uppercase_str(char* s) {
 static void flipper_rfid_scan_timer_callback(void* context) {
     FlipperRfidApp* app = context;
     if(!app || app->closing || !app->view_dispatcher || !app->scan_running) return;
+    if(app->scan_tick_pending) return;
+    app->scan_tick_pending = true;
     view_dispatcher_send_custom_event(app->view_dispatcher, EventScanTick);
 }
 
@@ -1267,6 +1309,14 @@ static void flipper_rfid_build_module_menu(FlipperRfidApp* app) {
     submenu_set_selected_item(app->module_menu, selected);
 }
 
+static void flipper_rfid_build_region_menu(FlipperRfidApp* app) {
+    submenu_reset(app->region_menu);
+    submenu_set_header(app->region_menu, "Region");
+    submenu_add_item(app->region_menu, "EU", RegionActionEu, flipper_rfid_submenu_event, app);
+    submenu_add_item(app->region_menu, "US", RegionActionUs, flipper_rfid_submenu_event, app);
+    submenu_set_selected_item(app->region_menu, (app->region == RfidRegionUs) ? RegionActionUs : RegionActionEu);
+}
+
 static void flipper_rfid_build_tx_power_menu(FlipperRfidApp* app) {
     submenu_reset(app->tx_power_menu);
     submenu_set_header(app->tx_power_menu, "TX Power (dB)");
@@ -1314,6 +1364,7 @@ static void flipper_rfid_build_config_menu(FlipperRfidApp* app) {
     submenu_reset(app->config_menu);
     submenu_set_header(app->config_menu, "Config");
     submenu_add_item(app->config_menu, "Module", MainActionModule, flipper_rfid_submenu_event, app);
+    submenu_add_item(app->config_menu, "Region", MainActionRegion, flipper_rfid_submenu_event, app);
     submenu_add_item(app->config_menu, "Read Mode", MainActionReadMode, flipper_rfid_submenu_event, app);
     submenu_add_item(app->config_menu, "TX Power", MainActionTxPower, flipper_rfid_submenu_event, app);
     submenu_add_item(app->config_menu, "Read Rate (ms)", MainActionReadRate, flipper_rfid_submenu_event, app);
@@ -1471,6 +1522,11 @@ static bool flipper_rfid_custom_event_callback(void* context, uint32_t event) {
         flipper_rfid_switch_view(app, ViewIdModule);
         return true;
 
+    case MainActionRegion:
+        flipper_rfid_build_region_menu(app);
+        flipper_rfid_switch_view(app, ViewIdRegion);
+        return true;
+
     case ModuleActionFm504:
     case ModuleActionFm505:
     case ModuleActionFm507:
@@ -1521,6 +1577,20 @@ static bool flipper_rfid_custom_event_callback(void* context, uint32_t event) {
     case MainActionReadMode:
         flipper_rfid_build_read_mode_menu(app);
         flipper_rfid_switch_view(app, ViewIdReadMode);
+        return true;
+
+    case RegionActionEu:
+        app->region = RfidRegionEu;
+        flipper_rfid_persist_settings(app);
+        snprintf(app->status_msg, sizeof(app->status_msg), "Region: EU");
+        flipper_rfid_switch_view(app, ViewIdMainMenu);
+        return true;
+
+    case RegionActionUs:
+        app->region = RfidRegionUs;
+        flipper_rfid_persist_settings(app);
+        snprintf(app->status_msg, sizeof(app->status_msg), "Region: US");
+        flipper_rfid_switch_view(app, ViewIdMainMenu);
         return true;
 
     case MainActionTxPower:
@@ -1642,6 +1712,7 @@ static bool flipper_rfid_custom_event_callback(void* context, uint32_t event) {
     case EventScanToggle:
         app->scan_running = !app->scan_running;
         if(app->scan_running) {
+            app->scan_tick_pending = false;
             bool probe_ok = true;
             snprintf(app->scan_last_line, sizeof(app->scan_last_line), "No reads");
             snprintf(app->scan_last_epc, sizeof(app->scan_last_epc), "No reads");
@@ -1668,6 +1739,7 @@ static bool flipper_rfid_custom_event_callback(void* context, uint32_t event) {
         } else {
             if(app->scan_timer) furi_timer_stop(app->scan_timer);
             rfid_driver_set_enabled(app->driver, false);
+            app->scan_tick_pending = false;
             snprintf(app->status_msg, sizeof(app->status_msg), "Scan stopped");
         }
         flipper_rfid_refresh_scan_view(app);
@@ -1872,6 +1944,9 @@ static bool flipper_rfid_custom_event_callback(void* context, uint32_t event) {
                     }
 
                     snprintf(app->status_msg, sizeof(app->status_msg), "ALL: %s", epc_tag.primary_hex);
+                    if(is_new) {
+                        flipper_rfid_autosave_scan_captures(app);
+                    }
                 }
                 rfid_driver_set_mode(app->driver, RfidScanModeEpc);
                 if(app->current_view == ViewIdScan) flipper_rfid_refresh_scan_view(app);
@@ -1891,10 +1966,14 @@ static bool flipper_rfid_custom_event_callback(void* context, uint32_t event) {
                     } else if(strcmp(read_label, "USER") == 0) {
                         snprintf(app->scan_last_user, sizeof(app->scan_last_user), "%s", tag.primary_hex);
                     }
+                    if(is_new) {
+                        flipper_rfid_autosave_scan_captures(app);
+                    }
                     if(app->current_view == ViewIdScan) flipper_rfid_refresh_scan_view(app);
                 }
             }
         }
+        app->scan_tick_pending = false;
         return true;
 
     case EventWriteCommit: {
@@ -2101,6 +2180,7 @@ static FlipperRfidApp* flipper_rfid_app_alloc(void) {
     memset(app, 0, sizeof(FlipperRfidApp));
 
     app->current_module = RfidModuleFm504;
+    app->region = RfidRegionEu;
     app->scan_mode = RfidScanModeEpc;
     app->tx_power_db = 3;
     app->read_rate_ms = 100;
@@ -2126,6 +2206,7 @@ static FlipperRfidApp* flipper_rfid_app_alloc(void) {
 
     RfidAppSettings settings = {
         .module = app->current_module,
+        .region = app->region,
         .scan_mode = app->scan_mode,
         .tx_power_db = app->tx_power_db,
         .read_rate_ms = app->read_rate_ms,
@@ -2135,6 +2216,7 @@ static FlipperRfidApp* flipper_rfid_app_alloc(void) {
     settings.access_password[sizeof(settings.access_password) - 1] = '\0';
     if(storage_settings_load(&settings)) {
         app->current_module = settings.module;
+        app->region = settings.region;
         app->scan_mode = settings.scan_mode;
         app->tx_power_db = settings.tx_power_db;
         app->read_rate_ms = settings.read_rate_ms;
@@ -2174,6 +2256,7 @@ static FlipperRfidApp* flipper_rfid_app_alloc(void) {
     app->clone_result_widget = widget_alloc();
     app->protection_widget = widget_alloc();
     app->module_menu = submenu_alloc();
+    app->region_menu = submenu_alloc();
     app->read_mode_menu = submenu_alloc();
     app->tx_power_menu = submenu_alloc();
     app->read_rate_menu = submenu_alloc();
@@ -2188,7 +2271,8 @@ static FlipperRfidApp* flipper_rfid_app_alloc(void) {
        !app->write_result_widget || !app->saved_tag_widget || !app->clone_source_widget ||
        !app->clone_target_widget || !app->clone_result_widget || !app->protection_widget ||
        !app->module_menu ||
-       !app->read_mode_menu || !app->tx_power_menu || !app->read_rate_menu || !app->about_widget ||
+       !app->region_menu || !app->read_mode_menu || !app->tx_power_menu || !app->read_rate_menu ||
+       !app->about_widget ||
        !app->scan_timer || !app->gui || !app->notification) {
         flipper_rfid_app_free(app);
         return NULL;
@@ -2223,6 +2307,7 @@ static FlipperRfidApp* flipper_rfid_app_alloc(void) {
     view_set_previous_callback(widget_get_view(app->clone_result_widget), flipper_rfid_prev_to_main_callback);
     view_set_previous_callback(widget_get_view(app->protection_widget), flipper_rfid_prev_to_main_callback);
     view_set_previous_callback(submenu_get_view(app->module_menu), flipper_rfid_prev_to_main_callback);
+    view_set_previous_callback(submenu_get_view(app->region_menu), flipper_rfid_prev_to_main_callback);
     view_set_previous_callback(submenu_get_view(app->read_mode_menu), flipper_rfid_prev_to_main_callback);
     view_set_previous_callback(submenu_get_view(app->tx_power_menu), flipper_rfid_prev_to_main_callback);
     view_set_previous_callback(submenu_get_view(app->read_rate_menu), flipper_rfid_prev_to_main_callback);
@@ -2246,6 +2331,7 @@ static FlipperRfidApp* flipper_rfid_app_alloc(void) {
     view_dispatcher_add_view(app->view_dispatcher, ViewIdCloneResult, widget_get_view(app->clone_result_widget));
     view_dispatcher_add_view(app->view_dispatcher, ViewIdProtection, widget_get_view(app->protection_widget));
     view_dispatcher_add_view(app->view_dispatcher, ViewIdModule, submenu_get_view(app->module_menu));
+    view_dispatcher_add_view(app->view_dispatcher, ViewIdRegion, submenu_get_view(app->region_menu));
     view_dispatcher_add_view(app->view_dispatcher, ViewIdReadMode, submenu_get_view(app->read_mode_menu));
     view_dispatcher_add_view(app->view_dispatcher, ViewIdTxPower, submenu_get_view(app->tx_power_menu));
     view_dispatcher_add_view(app->view_dispatcher, ViewIdReadRate, submenu_get_view(app->read_rate_menu));
@@ -2279,6 +2365,7 @@ static void flipper_rfid_app_free(FlipperRfidApp* app) {
     if(app->view_dispatcher) view_dispatcher_remove_view(app->view_dispatcher, ViewIdCloneResult);
     if(app->view_dispatcher) view_dispatcher_remove_view(app->view_dispatcher, ViewIdProtection);
     if(app->view_dispatcher) view_dispatcher_remove_view(app->view_dispatcher, ViewIdModule);
+    if(app->view_dispatcher) view_dispatcher_remove_view(app->view_dispatcher, ViewIdRegion);
     if(app->view_dispatcher) view_dispatcher_remove_view(app->view_dispatcher, ViewIdReadMode);
     if(app->view_dispatcher) view_dispatcher_remove_view(app->view_dispatcher, ViewIdTxPower);
     if(app->view_dispatcher) view_dispatcher_remove_view(app->view_dispatcher, ViewIdReadRate);
@@ -2299,6 +2386,7 @@ static void flipper_rfid_app_free(FlipperRfidApp* app) {
     if(app->clone_result_widget) widget_free(app->clone_result_widget);
     if(app->protection_widget) widget_free(app->protection_widget);
     if(app->module_menu) submenu_free(app->module_menu);
+    if(app->region_menu) submenu_free(app->region_menu);
     if(app->read_mode_menu) submenu_free(app->read_mode_menu);
     if(app->tx_power_menu) submenu_free(app->tx_power_menu);
     if(app->read_rate_menu) submenu_free(app->read_rate_menu);

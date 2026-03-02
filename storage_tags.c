@@ -253,12 +253,13 @@ bool storage_settings_save(const RfidAppSettings* settings) {
         if(!storage_simply_mkdir(storage, APP_DATA_DIR_NEW)) break;
         if(!storage_file_open(file, SETTINGS_FILE_NEW, FSAM_WRITE, FSOM_CREATE_ALWAYS)) break;
 
-        char buff[128];
+        char buff[160];
         int n = snprintf(
             buff,
             sizeof(buff),
-            "module=%u\nscan_mode=%u\ntx_power_db=%d\nread_rate_ms=%u\nuse_access_password=%u\naccess_password=%s\n",
+            "module=%u\nregion=%u\nscan_mode=%u\ntx_power_db=%d\nread_rate_ms=%u\nuse_access_password=%u\naccess_password=%s\n",
             (unsigned)settings->module,
+            (unsigned)settings->region,
             (unsigned)settings->scan_mode,
             settings->tx_power_db,
             (unsigned)settings->read_rate_ms,
@@ -311,6 +312,9 @@ bool storage_settings_load(RfidAppSettings* settings) {
                 if(strcmp(key, "module") == 0) {
                     long v = strtol(val, NULL, 10);
                     if(v >= (long)RfidModuleFm504 && v <= (long)RfidModuleRe40) settings->module = (RfidModuleType)v;
+                } else if(strcmp(key, "region") == 0) {
+                    long v = strtol(val, NULL, 10);
+                    if(v >= (long)RfidRegionEu && v <= (long)RfidRegionUs) settings->region = (RfidRegion)v;
                 } else if(strcmp(key, "scan_mode") == 0) {
                     long v = strtol(val, NULL, 10);
                     if(v >= (long)RfidScanModeEpc && v <= (long)RfidScanModeAll) settings->scan_mode = (RfidScanMode)v;

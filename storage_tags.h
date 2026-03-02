@@ -6,8 +6,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
+typedef enum {
+    RfidRegionEu = 0,
+    RfidRegionUs,
+} RfidRegion;
+
 typedef struct {
     RfidModuleType module;
+    RfidRegion region;
     RfidScanMode scan_mode;
     int8_t tx_power_db;
     uint16_t read_rate_ms;
