@@ -125,6 +125,8 @@ typedef enum {
     EventProtectionDo,
     EventProtectionBack,
     EventEpcDecodeBack,
+    EventEpcDecodeScan,
+    EventEpcDecodeDo,
     EventEpcDecodeRefresh,
     EventWriteSelectBase = 2000,
     EventTxPowerBase = 3000,
@@ -218,6 +220,7 @@ typedef struct {
     size_t saved_selected_idx;
     char saved_tag_text[320];
     char epc_decode_text[512];
+    bool epc_decode_scanning;
 } FlipperRfidApp;
 
 static void flipper_rfid_app_free(FlipperRfidApp* app);
@@ -507,10 +510,8 @@ static void flipper_rfid_epc_decode_button_callback(
     FlipperRfidApp* app = context;
     if(!app || app->closing || !app->view_dispatcher) return;
 
-    if(button == GuiButtonTypeLeft) {
-        view_dispatcher_send_custom_event(app->view_dispatcher, EventEpcDecodeBack);
-    } else if(button == GuiButtonTypeCenter) {
-        view_dispatcher_send_custom_event(app->view_dispatcher, EventEpcDecodeRefresh);
+    if(button == GuiButtonTypeCenter) {
+        view_dispatcher_send_custom_event(app->view_dispatcher, EventEpcDecodeScan);
     }
 }
 
@@ -1212,6 +1213,20 @@ static void flipper_rfid_refresh_epc_decode_view(FlipperRfidApp* app) {
     widget_reset(app->epc_decode_widget);
     widget_add_string_element(app->epc_decode_widget, 2, 2, AlignLeft, AlignTop, FontPrimary, "EPC Decode");
 
+    if(app->epc_decode_scanning) {
+        /* Simple visual effect while EPC scan is running */
+        widget_add_circle_element(app->epc_decode_widget, 26, 30, 7, false);
+        widget_add_circle_element(app->epc_decode_widget, 26, 30, 4, false);
+        widget_add_line_element(app->epc_decode_widget, 44, 20, 52, 24);
+        widget_add_line_element(app->epc_decode_widget, 44, 30, 56, 30);
+        widget_add_line_element(app->epc_decode_widget, 44, 40, 52, 36);
+        widget_add_string_element(
+            app->epc_decode_widget, 64, 22, AlignLeft, AlignTop, FontPrimary, "Scanning");
+        widget_add_string_element(
+            app->epc_decode_widget, 64, 34, AlignLeft, AlignTop, FontSecondary, "UHF EPC...");
+        return;
+    }
+
     char epc[97];
     epc[0] = '\0';
     if(!flipper_rfid_pick_epc_for_decode(app, epc, sizeof(epc))) {
@@ -1237,14 +1252,8 @@ static void flipper_rfid_refresh_epc_decode_view(FlipperRfidApp* app) {
     widget_add_text_scroll_element(app->epc_decode_widget, 2, 16, 124, 34, app->epc_decode_text);
     widget_add_button_element(
         app->epc_decode_widget,
-        GuiButtonTypeLeft,
-        "Back",
-        flipper_rfid_epc_decode_button_callback,
-        app);
-    widget_add_button_element(
-        app->epc_decode_widget,
         GuiButtonTypeCenter,
-        "Refresh",
+        "Scan",
         flipper_rfid_epc_decode_button_callback,
         app);
 }
@@ -1765,6 +1774,7 @@ static bool flipper_rfid_custom_event_callback(void* context, uint32_t event) {
         return true;
 
     case MainActionEpcDecode:
+        app->epc_decode_scanning = false;
         flipper_rfid_refresh_epc_decode_view(app);
         flipper_rfid_switch_view(app, ViewIdEpcDecode);
         return true;
@@ -2338,6 +2348,27 @@ static bool flipper_rfid_custom_event_callback(void* context, uint32_t event) {
     case EventEpcDecodeRefresh:
         flipper_rfid_refresh_epc_decode_view(app);
         return true;
+
+    case EventEpcDecodeScan:
+        app->epc_decode_scanning = true;
+        flipper_rfid_refresh_epc_decode_view(app);
+        view_dispatcher_send_custom_event(app->view_dispatcher, EventEpcDecodeDo);
+        return true;
+
+    case EventEpcDecodeDo: {
+        char epc[96] = {0};
+        bool ok = flipper_rfid_capture_single_epc_with_params(app, epc, sizeof(epc), 12, 120, 60);
+        app->epc_decode_scanning = false;
+        if(ok) {
+            snprintf(app->scan_last_epc, sizeof(app->scan_last_epc), "%s", epc);
+            snprintf(app->scan_last_line, sizeof(app->scan_last_line), "%s", epc);
+            snprintf(app->status_msg, sizeof(app->status_msg), "EPC captured");
+        } else {
+            snprintf(app->status_msg, sizeof(app->status_msg), "EPC scan failed");
+        }
+        flipper_rfid_refresh_epc_decode_view(app);
+        return true;
+    }
 
     case EventEpcDecodeBack:
         flipper_rfid_switch_view(app, ViewIdMainMenu);
